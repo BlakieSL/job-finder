@@ -1,0 +1,29 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv*/
+
+# IDE
+.idea/
+
+# Generated output
+output_cvs/
+
+# CV content (master CVs, templates, skills config)
+cv/
+docs/*.pdf
+
+# OS
+nul
+Thumbs.db
+.DS_Store
+
+# Node
+node_modules/
+
+# Claude Code
+.claude/
+.mcp.json
