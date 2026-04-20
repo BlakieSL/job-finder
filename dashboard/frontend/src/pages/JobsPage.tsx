@@ -5,11 +5,11 @@ import { JobDetail } from "./JobDetail"
 type Job = {
   id: string; source: string; position: string; company: string
   seniority: string; salary: string; fit_score: number | null
-  status: string; expires_at: string; url: string
+  status: string; expires_at: string; posted_at: string | null; url: string
 }
 type Stats = Record<string, number>
 type JobRef = { id: string; source: string } | null
-type SortOpt = "fit_score" | "company" | "expires_at" | "position"
+type SortOpt = "fit_score" | "company" | "expires_at" | "posted_at" | "position"
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 const STATUS_COLORS: Record<string, { dot: string; bg: string; text: string }> = {
@@ -23,6 +23,13 @@ const STATUS_COLORS: Record<string, { dot: string; bg: string; text: string }> =
 const STATUSES = ["new", "scored", "tailored", "pdf_ready", "applied", "expired"]
 const SENIORITIES = ["Junior", "Mid", "Senior", "Trainee", "Lead", "Manager"]
 const SOURCES = ["justjoinit", "nofluffjobs"]
+const POSTED_FILTERS: { key: string; label: string; days: number }[] = [
+  { key: "",   label: "Any time",     days: 0 },
+  { key: "0.5", label: "Last 12 hours", days: 0.5 },
+  { key: "1",  label: "Last 24 hours", days: 1 },
+  { key: "3",  label: "Last 3 days",   days: 3 },
+  { key: "7",  label: "Last week",     days: 7 },
+]
 
 function statusStyle(s: string) {
   return STATUS_COLORS[s] ?? { dot: "bg-gray-400", bg: "bg-gray-100", text: "text-gray-600" }
@@ -51,8 +58,8 @@ function avatarColor(name: string) {
 }
 
 // ── Console ───────────────────────────────────────────────────────────────────
-function Console({ log, running, onClear }: {
-  log: string; running: boolean; onClear: () => void
+function Console({ log, running, onClear, onStop }: {
+  log: string; running: boolean; onClear: () => void; onStop: () => void
 }) {
   const [fullscreen, setFullscreen] = useState(false)
   const logRef = useRef<HTMLPreElement>(null)
@@ -66,49 +73,90 @@ function Console({ log, running, onClear }: {
   return (
     <div className={`flex flex-col bg-gray-950 rounded-lg overflow-hidden border border-gray-800
       ${fullscreen ? "fixed inset-4 z-50 rounded-xl shadow-2xl" : ""}`}>
-      {/* Toolbar */}
       <div className="flex items-center px-3 py-1.5 bg-gray-900 border-b border-gray-800">
         <span className="text-xs font-mono flex-1">
           {running
             ? <span className="text-green-400 animate-pulse">● Running…</span>
             : <span className="text-gray-500">● Output</span>}
         </span>
-        <button
-          onClick={() => setFullscreen(f => !f)}
-          className="text-gray-400 hover:text-gray-200 text-xs px-2 py-0.5 rounded border border-gray-700 hover:border-gray-500 transition-colors"
-        >
+        {running && (
+          <button onClick={onStop}
+            className="text-red-400 hover:text-red-300 text-xs px-2 py-0.5 rounded border border-red-700 hover:border-red-500 transition-colors font-medium">
+            Stop
+          </button>
+        )}
+        <button onClick={() => setFullscreen(f => !f)}
+          className="ml-2 text-gray-400 hover:text-gray-200 text-xs px-2 py-0.5 rounded border border-gray-700 hover:border-gray-500 transition-colors">
           {fullscreen ? "Exit fullscreen" : "Fullscreen"}
         </button>
-        <button
-          onClick={onClear}
-          className="ml-2 text-gray-400 hover:text-red-400 text-xs px-2 py-0.5 rounded border border-gray-700 hover:border-red-700 transition-colors"
-        >
+        <button onClick={onClear}
+          className="ml-2 text-gray-400 hover:text-red-400 text-xs px-2 py-0.5 rounded border border-gray-700 hover:border-red-700 transition-colors">
           Clear
         </button>
       </div>
-
-      {/* Log output */}
-      <pre
-        ref={logRef}
+      <pre ref={logRef}
         className="overflow-auto text-xs font-mono text-green-400 p-3 leading-relaxed whitespace-pre-wrap"
-        style={fullscreen ? { flex: 1 } : { height: 160 }}
-      >
+        style={fullscreen ? { flex: 1 } : { height: 160 }}>
         {log}
       </pre>
     </div>
   )
 }
 
-// ── Score input ───────────────────────────────────────────────────────────────
-function ScoreInput({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+// ── Action popover ───────────────────────────────────────────────────────────
+const POSTED_OPTIONS: { label: string; hours: string }[] = [
+  { label: "All time",     hours: "" },
+  { label: "Last 12 hours", hours: "12" },
+  { label: "Last 24 hours", hours: "24" },
+  { label: "Last 3 days",   hours: "72" },
+  { label: "Last week",     hours: "168" },
+]
+
+function ActionPopover({ label, color, dot, showMinScore, onRun, onClose }: {
+  label: string; color: string; dot: string
+  showMinScore: boolean; onRun: (minScore: number, postedHours: string) => void; onClose: () => void
+}) {
+  const [minScore, setMinScore] = useState(59)
+  const [postedHours, setPostedHours] = useState("")
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handle(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+    }
+    document.addEventListener("mousedown", handle)
+    return () => document.removeEventListener("mousedown", handle)
+  }, [onClose])
+
   return (
-    <div className="flex items-center gap-1">
-      <span className="text-xs text-gray-400">≥</span>
-      <input
-        type="number" min={0} max={100} value={value}
-        onChange={e => onChange(Math.max(0, Math.min(100, Number(e.target.value))))}
-        className="w-12 h-6 text-xs text-center rounded border border-gray-200 bg-white focus:outline-none focus:ring-1 focus:ring-violet-400"
-      />
+    <div ref={ref} className="absolute top-full left-0 mt-1 z-20 bg-white rounded-lg border border-gray-200 shadow-lg p-3 min-w-[200px]">
+      <p className="text-xs font-semibold text-gray-700 mb-2">{label}</p>
+
+      {showMinScore && (
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-xs text-gray-500">Min score</span>
+          <input type="number" min={0} max={100} value={minScore}
+            onChange={e => setMinScore(Math.max(0, Math.min(100, Number(e.target.value))))}
+            className="w-14 h-6 text-xs text-center rounded border border-gray-200 bg-white focus:outline-none focus:ring-1 focus:ring-violet-400" />
+        </div>
+      )}
+
+      <div className="flex flex-col gap-0.5 mb-3">
+        <span className="text-xs text-gray-500 mb-0.5">Posted within</span>
+        {POSTED_OPTIONS.map(o => (
+          <button key={o.hours || "all"} onClick={() => setPostedHours(o.hours)}
+            className={`text-xs px-2 py-1 rounded text-left transition-colors
+              ${postedHours === o.hours ? "bg-violet-50 text-violet-700 font-medium" : "text-gray-600 hover:bg-gray-50"}`}>
+            {o.label}
+          </button>
+        ))}
+      </div>
+
+      <button onClick={() => { onRun(minScore, postedHours); onClose() }}
+        className={`w-full h-7 text-xs rounded-lg border font-medium flex items-center justify-center gap-1.5 transition-colors ${color}`}>
+        <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
+        Run {label}
+      </button>
     </div>
   )
 }
@@ -117,77 +165,131 @@ function ScoreInput({ value, onChange }: { value: number; onChange: (v: number) 
 function GlobalActions({ onDone }: { onDone: () => void }) {
   const [running, setRunning] = useState(false)
   const [log, setLog] = useState("")
-  const [tailorMin, setTailorMin] = useState(59)
-  const [pdfMin, setPdfMin] = useState(59)
+  const [openPopover, setOpenPopover] = useState<string | null>(null)
+  const abortRef = useRef<AbortController | null>(null)
 
   function runAction(endpoint: string) {
     setLog("")
     setRunning(true)
-    fetch(endpoint, { method: "POST" }).then(async res => {
+    setOpenPopover(null)
+    const controller = new AbortController()
+    abortRef.current = controller
+    fetch(endpoint, { method: "POST", signal: controller.signal }).then(async res => {
+      const contentType = res.headers.get("content-type") ?? ""
+      if (contentType.includes("application/json")) {
+        const data = await res.json()
+        setLog(JSON.stringify(data, null, 2) + "\n")
+        setRunning(false)
+        onDone()
+        return
+      }
       const reader = res.body!.getReader()
       const decoder = new TextDecoder()
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        const text = decoder.decode(value)
-        for (const line of text.split("\n").filter(l => l.startsWith("data: "))) {
-          const data = line.slice(6)
-          if (data === "[DONE]") { setRunning(false); onDone(); return }
-          setLog(prev => prev + data + "\n")
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          const text = decoder.decode(value)
+          for (const line of text.split("\n").filter(l => l.startsWith("data: "))) {
+            const data = line.slice(6)
+            if (data === "[DONE]") { setRunning(false); onDone(); return }
+            setLog(prev => prev + data + "\n")
+          }
         }
+      } catch (e) {
+        if ((e as Error).name !== "AbortError") throw e
       }
       setRunning(false)
-    }).catch(e => { setLog(prev => prev + `\nError: ${e}\n`); setRunning(false) })
+    }).catch(e => {
+      if ((e as Error).name === "AbortError") {
+        setLog(prev => prev + "\n⛔ Stopped.\n")
+        setRunning(false)
+        onDone()
+      } else {
+        setLog(prev => prev + `\nError: ${e}\n`)
+        setRunning(false)
+      }
+    })
   }
 
+  function stopAction() {
+    abortRef.current?.abort()
+  }
+
+  function buildUrl(base: string, minScore?: number, postedHours?: string) {
+    const p = new URLSearchParams()
+    if (minScore !== undefined) p.set("min_score", String(minScore))
+    if (postedHours) p.set("posted_within", postedHours)
+    const qs = p.toString()
+    return qs ? `${base}?${qs}` : base
+  }
+
+  const btnBase = "h-7 px-3 text-xs rounded-lg border font-medium flex items-center gap-1.5 disabled:opacity-40 transition-colors"
+
   return (
-    <div className="mb-4 rounded-xl border border-gray-200 bg-white overflow-hidden">
-      {/* Action buttons */}
-      <div className="flex flex-wrap gap-x-4 gap-y-2 items-center px-4 py-3 border-b border-gray-100">
+    <div className="mb-4 rounded-xl border border-gray-200 bg-white">
+      <div className="flex flex-wrap gap-x-3 gap-y-2 items-center px-4 py-3 border-b border-gray-100 overflow-visible relative">
 
-        {/* Scrape */}
         <button disabled={running} onClick={() => runAction("/api/actions/scrape")}
-          className="h-7 px-3 text-xs rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-40 transition-colors font-medium flex items-center gap-1.5">
+          className={`${btnBase} border-gray-200 text-gray-700 hover:bg-gray-50`}>
           <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
-          Scrape new jobs
+          Scrape
         </button>
 
-        {/* Score */}
-        <button disabled={running} onClick={() => runAction("/api/actions/score")}
-          className="h-7 px-3 text-xs rounded-lg border border-blue-200 text-blue-700 hover:bg-blue-50 disabled:opacity-40 transition-colors font-medium flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-          Score new
-        </button>
+        <div className="relative">
+          <button disabled={running} onClick={() => setOpenPopover(openPopover === "score" ? null : "score")}
+            className={`${btnBase} border-blue-200 text-blue-700 hover:bg-blue-50`}>
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+            Score
+          </button>
+          {openPopover === "score" && (
+            <ActionPopover label="Score" color="border-blue-200 text-blue-700 hover:bg-blue-50" dot="bg-blue-500"
+              showMinScore={false}
+              onRun={(_ms, ph) => runAction(buildUrl("/api/actions/score", undefined, ph))}
+              onClose={() => setOpenPopover(null)} />
+          )}
+        </div>
 
-        {/* Tailor with score input */}
-        <div className="flex items-center gap-1.5">
-          <button disabled={running}
-            onClick={() => runAction(`/api/actions/tailor?min_score=${tailorMin}`)}
-            className="h-7 px-3 text-xs rounded-lg border border-violet-200 text-violet-700 hover:bg-violet-50 disabled:opacity-40 transition-colors font-medium flex items-center gap-1.5">
+        <div className="relative">
+          <button disabled={running} onClick={() => setOpenPopover(openPopover === "tailor" ? null : "tailor")}
+            className={`${btnBase} border-violet-200 text-violet-700 hover:bg-violet-50`}>
             <span className="w-1.5 h-1.5 rounded-full bg-violet-500" />
             Tailor
           </button>
-          <ScoreInput value={tailorMin} onChange={setTailorMin} />
+          {openPopover === "tailor" && (
+            <ActionPopover label="Tailor" color="border-violet-200 text-violet-700 hover:bg-violet-50" dot="bg-violet-500"
+              showMinScore={true}
+              onRun={(ms, ph) => runAction(buildUrl("/api/actions/tailor", ms, ph))}
+              onClose={() => setOpenPopover(null)} />
+          )}
         </div>
 
-        {/* Generate PDFs with score input */}
-        <div className="flex items-center gap-1.5">
-          <button disabled={running}
-            onClick={() => runAction(`/api/actions/generate-pdf-batch?min_score=${pdfMin}`)}
-            className="h-7 px-3 text-xs rounded-lg border border-amber-200 text-amber-700 hover:bg-amber-50 disabled:opacity-40 transition-colors font-medium flex items-center gap-1.5">
+        <div className="relative">
+          <button disabled={running} onClick={() => setOpenPopover(openPopover === "pdf" ? null : "pdf")}
+            className={`${btnBase} border-amber-200 text-amber-700 hover:bg-amber-50`}>
             <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
             Generate PDFs
           </button>
-          <ScoreInput value={pdfMin} onChange={setPdfMin} />
+          {openPopover === "pdf" && (
+            <ActionPopover label="Generate PDFs" color="border-amber-200 text-amber-700 hover:bg-amber-50" dot="bg-amber-500"
+              showMinScore={true}
+              onRun={(ms, ph) => runAction(buildUrl("/api/actions/generate-pdf-batch", ms, ph))}
+              onClose={() => setOpenPopover(null)} />
+          )}
         </div>
+
+        <button disabled={running} onClick={() => runAction("/api/actions/drop-expired")}
+          className={`${btnBase} border-red-200 text-red-700 hover:bg-red-50`}>
+          <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+          Drop expired
+        </button>
 
         {running && (
           <span className="text-xs text-gray-400 animate-pulse ml-auto">Running…</span>
         )}
       </div>
 
-      {/* Console */}
-      <Console log={log} running={running} onClear={() => setLog("")} />
+      <Console log={log} running={running} onClear={() => setLog("")} onStop={stopAction} />
     </div>
   )
 }
@@ -224,16 +326,16 @@ function Navbar({ search, onSearch, sidebarOpen, onToggleSidebar }: {
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 function Sidebar({
-  stats, status, seniority, source, minScore,
-  onStatus, onSeniority, onSource, onMinScore, onReset,
+  stats, status, seniority, source, minScore, postedWithin,
+  onStatus, onSeniority, onSource, onMinScore, onPostedWithin, onReset,
 }: {
   stats: Stats
-  status: string; seniority: string; source: string; minScore: number
+  status: string; seniority: string; source: string; minScore: number; postedWithin: string
   onStatus: (v: string) => void; onSeniority: (v: string) => void
-  onSource: (v: string) => void; onMinScore: (v: number) => void
+  onSource: (v: string) => void; onMinScore: (v: number) => void; onPostedWithin: (v: string) => void
   onReset: () => void
 }) {
-  const hasFilters = status || seniority || source || minScore > 0
+  const hasFilters = status || seniority || source || minScore > 0 || postedWithin
 
   return (
     <aside className="w-52 shrink-0 flex flex-col gap-4 pt-5 pb-8">
@@ -250,7 +352,7 @@ function Sidebar({
       <section>
         <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-2 mb-1.5">Pipeline</h3>
         <div className="flex flex-col gap-0.5">
-          {[["", "All"], ...STATUSES.map(s => [s, s])].map(([val, label]) => {
+          {[["", "All"], ...STATUSES.map(s => [s, s])].map(([val]) => {
             const sc = statusStyle(val)
             const count = val === "" ? Object.values(stats).reduce((a, b) => a + b, 0) : (stats[val] ?? 0)
             const active = status === val
@@ -281,6 +383,20 @@ function Sidebar({
               className={`flex items-center px-2 py-1.5 rounded-lg text-sm transition-colors
                 ${source === val ? "bg-violet-50 text-violet-700 font-medium" : "text-gray-600 hover:bg-gray-100"}`}>
               {label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* Posted within */}
+      <section>
+        <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-2 mb-1.5">Posted</h3>
+        <div className="flex flex-col gap-0.5">
+          {POSTED_FILTERS.map(f => (
+            <button key={f.key || "any"} onClick={() => onPostedWithin(f.key)}
+              className={`flex items-center px-2 py-1.5 rounded-lg text-sm transition-colors
+                ${postedWithin === f.key ? "bg-violet-50 text-violet-700 font-medium" : "text-gray-600 hover:bg-gray-100"}`}>
+              {f.label}
             </button>
           ))}
         </div>
@@ -376,6 +492,7 @@ function SortBar({ total, sort, dir, onSort }: {
 }) {
   const opts: { key: SortOpt; label: string }[] = [
     { key: "fit_score", label: "Score" },
+    { key: "posted_at", label: "Posted" },
     { key: "position",  label: "Title" },
     { key: "company",   label: "Company" },
     { key: "expires_at",label: "Expires" },
@@ -406,11 +523,13 @@ export function JobsPage() {
   const [seniority, setSeniority] = useState("")
   const [source, setSource] = useState("")
   const [minScore, setMinScore] = useState(0)
+  const [postedWithin, setPostedWithin] = useState("")
   const [sort, setSort] = useState<SortOpt>("fit_score")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
   const [selected, setSelected] = useState<JobRef>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [detailWide, setDetailWide] = useState(false)
 
   useEffect(() => {
     fetch("/api/stats").then(r => r.json()).then(setStats)
@@ -427,11 +546,17 @@ export function JobsPage() {
 
   function handleSort(key: SortOpt) {
     if (sort === key) setSortDir(d => d === "asc" ? "desc" : "asc")
-    else { setSort(key); setSortDir(key === "fit_score" ? "desc" : "asc") }
+    else { setSort(key); setSortDir(key === "fit_score" || key === "posted_at" ? "desc" : "asc") }
   }
 
+  const postedCutoff = postedWithin
+    ? new Date(Date.now() - parseFloat(postedWithin) * 86400000).toISOString().slice(0, 10)
+    : ""
+
   const displayed = [...jobs]
+    .filter(j => j.position !== "Not found" && j.company !== "Not found")
     .filter(j => !seniority || j.seniority === seniority)
+    .filter(j => !postedCutoff || (j.posted_at != null && j.posted_at >= postedCutoff))
     .sort((a, b) => {
       let cmp = sort === "fit_score"
         ? ((a.fit_score ?? -1) - (b.fit_score ?? -1))
@@ -442,7 +567,7 @@ export function JobsPage() {
   function refresh() { setRefreshKey(k => k + 1) }
 
   function resetFilters() {
-    setStatus(""); setSeniority(""); setSource(""); setMinScore(0)
+    setStatus(""); setSeniority(""); setSource(""); setMinScore(0); setPostedWithin("")
   }
 
   return (
@@ -453,9 +578,9 @@ export function JobsPage() {
       <div className="flex max-w-[1600px] mx-auto px-4 gap-6">
         {sidebarOpen && (
           <Sidebar
-            stats={stats} status={status} seniority={seniority} source={source} minScore={minScore}
+            stats={stats} status={status} seniority={seniority} source={source} minScore={minScore} postedWithin={postedWithin}
             onStatus={setStatus} onSeniority={setSeniority} onSource={setSource}
-            onMinScore={setMinScore} onReset={resetFilters}
+            onMinScore={setMinScore} onPostedWithin={setPostedWithin} onReset={resetFilters}
           />
         )}
 
@@ -467,9 +592,11 @@ export function JobsPage() {
               <JobCard
                 key={`${job.id}-${job.source}`} job={job}
                 selected={selected?.id === job.id && selected?.source === job.source}
-                onClick={() => setSelected(sel =>
-                  sel?.id === job.id && sel?.source === job.source ? null : { id: job.id, source: job.source }
-                )}
+                onClick={() => setSelected(sel => {
+                  const next = sel?.id === job.id && sel?.source === job.source ? null : { id: job.id, source: job.source }
+                  if (!next) setDetailWide(false)
+                  return next
+                })}
               />
             ))}
             {displayed.length === 0 && (
@@ -479,9 +606,14 @@ export function JobsPage() {
         </main>
 
         {selected && (
-          <div className="w-[400px] shrink-0 py-5">
+          <div className={`shrink-0 py-5 transition-all duration-200 ${detailWide ? "w-[55vw] min-w-[700px] max-w-[1000px]" : "w-[400px]"}`}>
             <div className="sticky top-20">
-              <JobDetail jobRef={selected} onClose={() => setSelected(null)} onUpdated={refresh} />
+              <JobDetail
+                jobRef={selected}
+                onClose={() => { setSelected(null); setDetailWide(false) }}
+                onUpdated={refresh}
+                onJobLoaded={(hasValidCv) => setDetailWide(hasValidCv)}
+              />
             </div>
           </div>
         )}
