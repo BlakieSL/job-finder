@@ -72,6 +72,7 @@ def parse_skills_from_md(variant: str) -> list[dict]:
             continue
         label, rest = line.split(':', 1)
         label = label.strip().strip('*')
+        rest = rest.strip().lstrip('*').strip()
         items = [s.strip() for s in rest.split(',') if s.strip()]
         skills.append({'label': label, 'items': items})
 
@@ -247,9 +248,13 @@ def add_matched_skills(skills: list[dict], matched: list[tuple[str, str]]) -> li
 SYSTEM_PROMPT = """You are helping tailor a CV for ATS optimisation. You will receive a job posting
 and the candidate's current summary. Return ONLY a JSON object with these fields:
 
-1. "title" — The best CV title for this specific job. Use the exact role title from the job posting
-   but keep it short (2-4 words). Examples: "SOFTWARE ENGINEER", "BACKEND DEVELOPER",
-   "JAVA DEVELOPER", "FULL STACK ENGINEER". Always uppercase.
+1. "title" — The best CV title for this specific job. Keep it short (2-4 words). Always uppercase.
+   CRITICAL RULE: NEVER include seniority prefixes like "Junior", "Mid", "Senior", "Lead", "Trainee"
+   in the title. The candidate presents as a general-level professional — seniority labels limit them.
+   Good: "SOFTWARE ENGINEER", "JAVA DEVELOPER", "BACKEND DEVELOPER", "FULL STACK ENGINEER".
+   Bad: "JUNIOR JAVA DEVELOPER", "MID SOFTWARE ENGINEER", "SENIOR BACKEND DEVELOPER".
+   You MAY change the specialization to match the job (e.g. "Java Developer" → "Backend Developer"
+   or "Cloud Engineer") but NEVER add or change seniority level.
 
 2. "first_sentence" — Rewrite ONLY the first sentence of the candidate's professional summary
    to open with the job title and weave in 2-3 of the most important requirements naturally.
@@ -302,6 +307,7 @@ Return the JSON object with "title" and "first_sentence"."""
         data = json.loads(raw)
 
         title = str(data.get('title', 'SOFTWARE ENGINEER')).upper().strip()
+        title = re.sub(r'^(JUNIOR|MID|MID-LEVEL|MIDDLE|SENIOR|LEAD|PRINCIPAL|TRAINEE|INTERN)\s+', '', title)
         first_sentence = str(data.get('first_sentence', '')).strip()
 
         return {'title': title, 'first_sentence': first_sentence}, ''
