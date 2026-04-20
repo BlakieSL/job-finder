@@ -258,13 +258,19 @@ and the candidate's current summary. Return ONLY a JSON object with these fields
 
 2. "first_sentence" — Rewrite ONLY the first sentence of the candidate's professional summary
    to open with the job title and weave in 2-3 of the most important requirements naturally.
-   Keep the same assertive, quantified tone as the original. Keep it factual — do not invent
-   experience. This replaces ONLY sentence 1. The rest of the summary stays unchanged.
+   Keep the same assertive, quantified tone as the original. This replaces ONLY sentence 1.
+   CRITICAL RULES:
+   - NEVER mention the company name. The CV must be company-neutral.
+     Bad: "...seeking to contribute at COMARCH" or "...to join Revolut's team".
+   - ONLY mention technologies/skills from the candidate's ACTUAL SKILLS LIST provided below.
+     Do NOT invent or add skills the candidate doesn't have. If a job requires Angular but the
+     candidate doesn't list it, do NOT mention Angular in the summary.
+   - Focus on the candidate's REAL strengths that overlap with the job requirements.
 
 Return ONLY valid JSON, no markdown, no explanation."""
 
 
-def llm_tailor(client: OpenAI, job: dict, current_summary: str) -> tuple[dict, str]:
+def llm_tailor(client: OpenAI, job: dict, current_summary: str, variant: str = 'crp') -> tuple[dict, str]:
     """
     Ask LLM for title and first_sentence only.
     Returns (result_dict, error_string). On failure: ({}, error).
@@ -278,6 +284,9 @@ def llm_tailor(client: OpenAI, job: dict, current_summary: str) -> tuple[dict, s
         try: nice = json.loads(nice)
         except: nice = [nice]
 
+    skills = parse_skills_from_md(variant)
+    all_skills = [item for group in skills for item in group['items']]
+
     prompt = f"""Job posting:
 Position: {job.get('position', 'N/A')}
 Company: {job.get('company', 'N/A')}
@@ -289,6 +298,9 @@ Description (first 2000 chars):
 
 Candidate's current professional summary:
 {current_summary}
+
+Candidate's ACTUAL skills (only mention these in first_sentence):
+{', '.join(all_skills)}
 
 Return the JSON object with "title" and "first_sentence"."""
 
@@ -473,7 +485,7 @@ def main():
             requirements = must_raw or []
 
         summary = parse_summary_from_md(cv_variant)
-        llm_result, error = llm_tailor(client, job, summary)
+        llm_result, error = llm_tailor(client, job, summary, cv_variant)
         if error:
             print(f"  ❌  {error}")
             update_job(conn, job['id'], job['source'], json.dumps({'error': error}))
@@ -538,7 +550,7 @@ def main():
 
             # Get LLM decisions (title, first sentence, extra skills)
             summary = parse_summary_from_md(cv_variant)
-            llm_result, error = llm_tailor(client, job, summary)
+            llm_result, error = llm_tailor(client, job, summary, cv_variant)
 
             if error:
                 total_errors += 1
