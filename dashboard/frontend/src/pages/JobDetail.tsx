@@ -84,6 +84,7 @@ const STATUS_COLORS: Record<string, string> = {
   pdf_ready: "bg-amber-50 text-amber-700",
   applied:   "bg-green-50 text-green-700",
   expired:   "bg-red-50 text-red-600",
+  inactive:  "bg-red-50 text-red-500",
 }
 
 function scoreColor(score: number) {
@@ -284,7 +285,7 @@ export function JobDetail({ jobRef, onClose, onUpdated, onJobLoaded }: {
                   onChange={e => changeStatus(e.target.value)}
                   className="h-7 rounded-lg border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-violet-400"
                 >
-                  {["new", "scored", "tailored", "pdf_ready", "applied", "expired"].map(s =>
+                  {["new", "scored", "tailored", "pdf_ready", "applied", "expired", "inactive"].map(s =>
                     <option key={s} value={s}>{s === "pdf_ready" ? "PDF ready" : s}</option>
                   )}
                 </select>
@@ -446,7 +447,7 @@ export function JobDetail({ jobRef, onClose, onUpdated, onJobLoaded }: {
                 onChange={e => changeStatus(e.target.value)}
                 className="h-7 rounded-lg border border-gray-200 bg-white px-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-violet-400"
               >
-                {["new", "scored", "tailored", "pdf_ready", "applied", "expired"].map(s =>
+                {["new", "scored", "tailored", "pdf_ready", "applied", "expired", "inactive"].map(s =>
                   <option key={s} value={s}>{s === "pdf_ready" ? "PDF ready" : s}</option>
                 )}
               </select>

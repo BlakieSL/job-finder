@@ -19,8 +19,9 @@ const STATUS_COLORS: Record<string, { dot: string; bg: string; text: string }> =
   pdf_ready: { dot: "bg-amber-500",  bg: "bg-amber-50",   text: "text-amber-700" },
   applied:   { dot: "bg-green-500",  bg: "bg-green-50",   text: "text-green-700" },
   expired:   { dot: "bg-red-400",    bg: "bg-red-50",     text: "text-red-600" },
+  inactive:  { dot: "bg-red-300",    bg: "bg-red-50",     text: "text-red-500" },
 }
-const STATUSES = ["new", "scored", "tailored", "pdf_ready", "applied", "expired"]
+const STATUSES = ["new", "scored", "tailored", "pdf_ready", "applied", "expired", "inactive"]
 const SENIORITIES = ["Junior", "Mid", "Senior", "Trainee", "Lead", "Manager"]
 const SOURCES = ["justjoinit", "nofluffjobs"]
 const POSTED_FILTERS: { key: string; label: string; days: number }[] = [
@@ -448,7 +449,8 @@ function JobCard({ job, selected, onClick }: { job: Job; selected: boolean; onCl
   const sc = statusStyle(job.status)
   return (
     <div onClick={onClick}
-      className={`bg-white rounded-xl border cursor-pointer transition-all duration-150 p-4 flex gap-3
+      className={`rounded-xl border cursor-pointer transition-all duration-150 p-4 flex gap-3
+        ${job.status === "inactive" ? "bg-red-50/60" : "bg-white"}
         ${selected ? "border-violet-400 shadow-md ring-1 ring-violet-300" : "border-gray-200 hover:border-gray-300 hover:shadow-sm"}`}>
       <div className={`w-10 h-10 rounded-lg ${avatarColor(job.company)} flex items-center justify-center shrink-0 text-white text-sm font-bold`}>
         {companyInitials(job.company)}
