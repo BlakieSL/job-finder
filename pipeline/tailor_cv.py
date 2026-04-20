@@ -361,14 +361,20 @@ def get_connection():
     return pymysql.connect(**DB_CONFIG)
 
 
-def fetch_batch(conn, min_score: int) -> list:
+def posted_within_clause(hours: float | None) -> str:
+    if hours is None:
+        return ""
+    return f" AND posted_at >= DATE(DATE_SUB(NOW(), INTERVAL {hours} HOUR))"
+
+
+def fetch_batch(conn, min_score: int, posted_hours: float | None = None) -> list:
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             SELECT id, source, position, company, seniority,
                    requirements_must, requirements_nice, job_description,
                    fit_score, fit_notes, cv_variant
             FROM jobs
-            WHERE status = 'scored' AND fit_score >= %s
+            WHERE status = 'scored' AND fit_score >= %s{posted_within_clause(posted_hours)}
             ORDER BY fit_score DESC
             LIMIT %s
         """, (min_score, BATCH_SIZE))
@@ -396,12 +402,12 @@ def verify_update(conn, job_id: str, source: str) -> dict | None:
         return cur.fetchone()
 
 
-def count_remaining(conn, min_score: int) -> int:
+def count_remaining(conn, min_score: int, posted_hours: float | None = None) -> int:
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             SELECT COUNT(*) AS cnt
             FROM jobs
-            WHERE status = 'scored' AND fit_score >= %s
+            WHERE status = 'scored' AND fit_score >= %s{posted_within_clause(posted_hours)}
         """, (min_score,))
         row = cur.fetchone()
         return row['cnt'] if row else 0
@@ -415,6 +421,8 @@ def main():
     parser.add_argument('--limit',     type=int, default=None, help='Max number of jobs to process')
     parser.add_argument('--min-score', type=int, default=MIN_SCORE_DEFAULT,
                         help=f'Minimum fit_score to tailor (default: {MIN_SCORE_DEFAULT})')
+    parser.add_argument('--posted-within', type=float, default=None,
+                        help='Only tailor jobs posted within this many hours')
     args = parser.parse_args()
 
     client = OpenAI(
@@ -423,7 +431,7 @@ def main():
     )
 
     conn = get_connection()
-    remaining = count_remaining(conn, args.min_score)
+    remaining = count_remaining(conn, args.min_score, args.posted_within)
     print(f'🎯  Jobs eligible (scored, fit_score >= {args.min_score}): {remaining}')
     if args.limit:
         print(f'    Processing at most: {args.limit}')
@@ -445,7 +453,7 @@ def main():
         if args.limit and total_tailored + total_errors >= args.limit:
             break
 
-        batch = fetch_batch(conn, args.min_score)
+        batch = fetch_batch(conn, args.min_score, args.posted_within)
         if not batch:
             break
 

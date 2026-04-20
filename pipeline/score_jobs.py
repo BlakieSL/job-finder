@@ -12,6 +12,7 @@ Usage:
     python score_jobs.py
 """
 
+import argparse
 import json
 import os
 import sys
@@ -149,13 +150,19 @@ def get_connection():
     return pymysql.connect(**DB_CONFIG)
 
 
-def fetch_batch(conn) -> list:
+def posted_within_clause(hours: float | None) -> str:
+    if hours is None:
+        return ""
+    return f" AND posted_at >= DATE(DATE_SUB(NOW(), INTERVAL {hours} HOUR))"
+
+
+def fetch_batch(conn, posted_hours: float | None = None) -> list:
     with conn.cursor() as cur:
-        cur.execute("""
+        cur.execute(f"""
             SELECT id, source, position, company, seniority,
                    requirements_must, requirements_nice, job_description
             FROM jobs
-            WHERE status = 'new'
+            WHERE status = 'new'{posted_within_clause(posted_hours)}
             LIMIT %s
         """, (BATCH_SIZE,))
         return cur.fetchall()
@@ -224,6 +231,11 @@ def score_job(client: OpenAI, job: dict) -> tuple[int, str, str]:
 # MAIN
 # ---------------------------------------------------------------------------
 def main():
+    parser = argparse.ArgumentParser(description='Score new jobs')
+    parser.add_argument('--posted-within', type=float, default=None,
+                        help='Only score jobs posted within this many hours')
+    args = parser.parse_args()
+
     if not DEEPSEEK_API_KEY:
         print("❌  Set DEEPSEEK_API_KEY in .env file")
         return
@@ -238,10 +250,11 @@ def main():
     total_errors = 0
     batch_num = 0
 
-    print("🚀  Starting scoring...\n")
+    label = f" (posted within {args.posted_within}h)" if args.posted_within else ""
+    print(f"🚀  Starting scoring{label}...\n")
 
     while True:
-        batch = fetch_batch(conn)
+        batch = fetch_batch(conn, args.posted_within)
         if not batch:
             break
 
