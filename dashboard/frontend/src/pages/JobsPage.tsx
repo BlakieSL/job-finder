@@ -554,7 +554,6 @@ export function JobsPage() {
     : ""
 
   const displayed = [...jobs]
-    .filter(j => j.position !== "Not found" && j.company !== "Not found")
     .filter(j => !seniority || j.seniority === seniority)
     .filter(j => !postedCutoff || (j.posted_at != null && j.posted_at >= postedCutoff))
     .sort((a, b) => {

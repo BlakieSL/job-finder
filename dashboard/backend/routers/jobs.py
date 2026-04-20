@@ -15,8 +15,9 @@ def list_jobs(
         cur = conn.cursor(dictionary=True)
         sql = """
             SELECT id, source, position, company, seniority, salary,
-                   fit_score, status, expires_at, scraped_at, url, notes, fit_notes, cv_variant
-            FROM jobs WHERE (fit_score >= %s OR fit_score IS NULL)
+                   fit_score, status, expires_at, scraped_at, posted_at, url, notes, fit_notes, cv_variant
+            FROM jobs WHERE position != 'Not found' AND company != 'Not found'
+              AND (fit_score >= %s OR fit_score IS NULL)
         """
         params = [min_score]
         if status:
@@ -32,7 +33,7 @@ def list_jobs(
         cur.execute(sql, params)
         rows = cur.fetchall()
     for row in rows:
-        for col in ("expires_at", "scraped_at", "applied_at"):
+        for col in ("expires_at", "scraped_at", "posted_at", "applied_at"):
             if row.get(col) is not None:
                 row[col] = str(row[col])
     return rows
@@ -47,7 +48,7 @@ def get_job(id: str, source: str):
         for col in ("requirements_must", "requirements_nice", "extra_details"):
             if isinstance(row.get(col), str):
                 row[col] = json.loads(row[col])
-        for col in ("expires_at", "scraped_at", "applied_at"):
+        for col in ("expires_at", "scraped_at", "posted_at", "applied_at"):
             if row.get(col) is not None:
                 row[col] = str(row[col])
     return row
@@ -72,6 +73,10 @@ def update_job(id: str, source: str, body: dict):
 def stats():
     with get_conn() as conn:
         cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT status, COUNT(*) as count FROM jobs GROUP BY status")
+        cur.execute("""
+            SELECT status, COUNT(*) as count FROM jobs
+            WHERE position != 'Not found' AND company != 'Not found'
+            GROUP BY status
+        """)
         rows = cur.fetchall()
     return {r["status"]: r["count"] for r in rows}
