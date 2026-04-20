@@ -35,6 +35,13 @@ async def stream_script(script_name: str, extra_args: list[str] = None):
             await proc.wait()
 
 
+@router.post("/actions/add-from-url")
+async def action_add_from_url(url: str = Query(...)):
+    return StreamingResponse(
+        stream_script("scrapers/add_from_url.py", [url]),
+        media_type="text/event-stream"
+    )
+
 @router.post("/actions/scrape")
 async def action_scrape():
     return StreamingResponse(stream_script("scrapers/scrape_all.py"), media_type="text/event-stream")

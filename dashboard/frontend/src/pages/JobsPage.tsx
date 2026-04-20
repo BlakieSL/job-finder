@@ -168,6 +168,7 @@ function GlobalActions({ onDone }: { onDone: () => void }) {
   const [log, setLog] = useState("")
   const [openPopover, setOpenPopover] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const [jobUrl, setJobUrl] = useState("")
 
   function runAction(endpoint: string) {
     setLog("")
@@ -288,6 +289,22 @@ function GlobalActions({ onDone }: { onDone: () => void }) {
         {running && (
           <span className="text-xs text-gray-400 animate-pulse ml-auto">Running…</span>
         )}
+      </div>
+
+      {/* URL input */}
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-100">
+        <input
+          type="text" placeholder="Paste job URL to add..."
+          value={jobUrl} onChange={e => setJobUrl(e.target.value)}
+          onKeyDown={e => { if (e.key === "Enter" && jobUrl.trim() && !running) { runAction(`/api/actions/add-from-url?url=${encodeURIComponent(jobUrl.trim())}`); setJobUrl("") } }}
+          className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-1.5 bg-gray-50 focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent"
+        />
+        <button disabled={running || !jobUrl.trim()}
+          onClick={() => { runAction(`/api/actions/add-from-url?url=${encodeURIComponent(jobUrl.trim())}`); setJobUrl("") }}
+          className={`${btnBase} border-teal-200 text-teal-700 hover:bg-teal-50`}>
+          <span className="w-1.5 h-1.5 rounded-full bg-teal-500" />
+          Add job
+        </button>
       </div>
 
       <Console log={log} running={running} onClear={() => setLog("")} onStop={stopAction} />
