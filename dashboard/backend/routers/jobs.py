@@ -17,9 +17,9 @@ def list_jobs(
             SELECT id, source, position, company, seniority, salary,
                    fit_score, status, expires_at, scraped_at, posted_at, url, notes, fit_notes, cv_variant
             FROM jobs WHERE position != 'Not found' AND company != 'Not found'
-              AND (fit_score >= %s OR fit_score IS NULL)
+              AND (fit_score >= %s OR (%s = 0 AND fit_score IS NULL))
         """
-        params = [min_score]
+        params = [min_score, min_score]
         if status:
             sql += " AND status = %s"
             params.append(status)
