@@ -3,6 +3,56 @@ import { Button } from "@/components/ui/button"
 
 type JobRef = { id: string; source: string }
 
+// ── highlight utility ────────────────────────────────────────────────────────
+function escapeRegex(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function highlightKeywords(
+  text: string,
+  mustHave: string[],
+  niceToHave: string[],
+): string {
+  const tags: { pattern: RegExp; cls: string }[] = []
+
+  const sorted = [
+    ...mustHave.map(k => ({ keyword: k, cls: "bg-emerald-100 text-emerald-800 rounded px-0.5" })),
+    ...niceToHave.map(k => ({ keyword: k, cls: "bg-sky-100 text-sky-700 rounded px-0.5" })),
+  ].sort((a, b) => b.keyword.length - a.keyword.length)
+
+  for (const { keyword, cls } of sorted) {
+    if (!keyword.trim()) continue
+    tags.push({ pattern: new RegExp(`(${escapeRegex(keyword)})`, "gi"), cls })
+  }
+
+  if (tags.length === 0) return text
+
+  // Always use DOM TreeWalker — safe for both plain text and HTML.
+  // For plain text input, the browser treats it as a single text node,
+  // so this approach works identically. This avoids the re-wrapping bug
+  // where sequential regex passes on a raw string would match inside
+  // previously injected <mark> class attributes.
+  const container = document.createElement("div")
+  container.innerHTML = text
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT)
+  const textNodes: Text[] = []
+  while (walker.nextNode()) textNodes.push(walker.currentNode as Text)
+
+  for (const node of textNodes) {
+    let html = node.textContent ?? ""
+    for (const { pattern, cls } of tags) {
+      html = html.replace(pattern, `<mark class="${cls}">$1</mark>`)
+    }
+    if (html !== node.textContent) {
+      const span = document.createElement("span")
+      span.innerHTML = html
+      node.parentNode?.replaceChild(span, node)
+    }
+  }
+
+  return container.innerHTML
+}
+
 type FullJob = {
   id: string; source: string; position: string; company: string
   seniority: string; salary: string; fit_score: number | null
