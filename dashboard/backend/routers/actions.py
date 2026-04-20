@@ -5,6 +5,7 @@ import re
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi import HTTPException
+from db import get_conn
 
 router = APIRouter()
 
@@ -39,20 +40,41 @@ async def action_scrape():
     return StreamingResponse(stream_script("scrapers/scrape_all.py"), media_type="text/event-stream")
 
 @router.post("/actions/score")
-async def action_score():
-    return StreamingResponse(stream_script("pipeline/score_jobs.py"), media_type="text/event-stream")
+async def action_score(posted_within: float = Query(default=None)):
+    extra = ["--posted-within", str(posted_within)] if posted_within is not None else []
+    return StreamingResponse(stream_script("pipeline/score_jobs.py", extra), media_type="text/event-stream")
+
+@router.post("/actions/score/{job_id}/{source}")
+async def action_score_single(job_id: str, source: str):
+    return StreamingResponse(
+        stream_script("pipeline/score_jobs.py", ["--job-id", job_id]),
+        media_type="text/event-stream"
+    )
+
+@router.post("/actions/tailor/{job_id}/{source}")
+async def action_tailor_single(job_id: str, source: str):
+    return StreamingResponse(
+        stream_script("pipeline/tailor_cv.py", ["--job-id", job_id]),
+        media_type="text/event-stream"
+    )
 
 @router.post("/actions/tailor")
-async def action_tailor(min_score: int = Query(default=59)):
+async def action_tailor(min_score: int = Query(default=59), posted_within: float = Query(default=None)):
+    extra = ["--min-score", str(min_score)]
+    if posted_within is not None:
+        extra += ["--posted-within", str(posted_within)]
     return StreamingResponse(
-        stream_script("pipeline/tailor_cv.py", ["--min-score", str(min_score)]),
+        stream_script("pipeline/tailor_cv.py", extra),
         media_type="text/event-stream"
     )
 
 @router.post("/actions/generate-pdf-batch")
-async def action_generate_pdf_batch(min_score: int = Query(default=59)):
+async def action_generate_pdf_batch(min_score: int = Query(default=59), posted_within: float = Query(default=None)):
+    extra = ["--batch", "--min-score", str(min_score)]
+    if posted_within is not None:
+        extra += ["--posted-within", str(posted_within)]
     return StreamingResponse(
-        stream_script("pipeline/generate_cv.py", ["--batch", "--min-score", str(min_score)]),
+        stream_script("pipeline/generate_cv.py", extra),
         media_type="text/event-stream"
     )
 
@@ -70,6 +92,18 @@ async def get_job_pdf(job_id: str, source: str):
     if not os.path.exists(pdf_path):
         raise HTTPException(status_code=404, detail="PDF not found")
     return FileResponse(pdf_path, media_type="application/pdf", filename=f"cv_{safe}.pdf")
+
+@router.post("/actions/drop-expired")
+def action_drop_expired():
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM jobs WHERE expires_at < CURDATE() OR position = 'Not found'"
+        )
+        deleted = cur.rowcount
+        conn.commit()
+    return {"deleted": deleted}
+
 
 @router.get("/jobs/{job_id}/{source}/pdf-exists")
 async def check_job_pdf(job_id: str, source: str):

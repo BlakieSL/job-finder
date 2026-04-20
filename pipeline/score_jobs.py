@@ -168,6 +168,17 @@ def fetch_batch(conn, posted_hours: float | None = None) -> list:
         return cur.fetchall()
 
 
+def fetch_single(conn, job_id: str) -> list:
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, source, position, company, seniority,
+                   requirements_must, requirements_nice, job_description
+            FROM jobs
+            WHERE id = %s
+        """, (job_id,))
+        return cur.fetchall()
+
+
 def update_job(conn, job_id: str, source: str, score: int, notes: str, cv_variant: str = 'crp'):
     with conn.cursor() as cur:
         cur.execute("""
@@ -234,6 +245,8 @@ def main():
     parser = argparse.ArgumentParser(description='Score new jobs')
     parser.add_argument('--posted-within', type=float, default=None,
                         help='Only score jobs posted within this many hours')
+    parser.add_argument('--job-id', type=str, default=None,
+                        help='Score a single job by ID (any status)')
     args = parser.parse_args()
 
     if not DEEPSEEK_API_KEY:
@@ -246,6 +259,27 @@ def main():
     )
 
     conn = get_connection()
+
+    if args.job_id:
+        batch = fetch_single(conn, args.job_id)
+        if not batch:
+            print(f"❌  Job '{args.job_id}' not found")
+            conn.close()
+            return
+        job = batch[0]
+        print(f"🚀  Scoring single job: {job['company']} — {job['position']}\n")
+        score, notes, cv_variant = score_job(client, job)
+        if notes.startswith("API error") or notes.startswith("JSON parse"):
+            print(f"  ❌  {notes}")
+            update_job(conn, job['id'], job['source'], 0, notes, cv_variant)
+        else:
+            update_job(conn, job['id'], job['source'], score, notes, cv_variant)
+            bar = "🟢" if score >= 70 else "🟡" if score >= 50 else "🔴"
+            print(f"  {bar}  [{score:>3}] {notes[:120]}")
+        print(f"\n✅  Done.")
+        conn.close()
+        return
+
     total_scored = 0
     total_errors = 0
     batch_num = 0

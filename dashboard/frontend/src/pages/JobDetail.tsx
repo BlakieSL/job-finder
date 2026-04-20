@@ -288,6 +288,16 @@ export function JobDetail({ jobRef, onClose, onUpdated, onJobLoaded }: {
                     <option key={s} value={s}>{s === "pdf_ready" ? "PDF ready" : s}</option>
                   )}
                 </select>
+                <Button size="sm" variant="outline" disabled={running}
+                  onClick={() => runActionPost(`/api/actions/score/${job.id}/${job.source}`)}
+                  className="h-7 text-xs border-blue-200 text-blue-700 hover:bg-blue-50">
+                  Score
+                </Button>
+                <Button size="sm" variant="outline" disabled={running}
+                  onClick={() => runActionPost(`/api/actions/tailor/${job.id}/${job.source}`)}
+                  className="h-7 text-xs border-violet-200 text-violet-700 hover:bg-violet-50">
+                  Tailor
+                </Button>
                 <Button
                   size="sm" variant="outline" disabled={running}
                   onClick={() => runActionPost(`/api/actions/generate-pdf/${job.id}/${job.source}`)}
@@ -440,6 +450,16 @@ export function JobDetail({ jobRef, onClose, onUpdated, onJobLoaded }: {
                   <option key={s} value={s}>{s === "pdf_ready" ? "PDF ready" : s}</option>
                 )}
               </select>
+              <Button size="sm" variant="outline" disabled={running}
+                onClick={() => runActionPost(`/api/actions/score/${job.id}/${job.source}`)}
+                className="h-7 text-xs border-blue-200 text-blue-700 hover:bg-blue-50">
+                Score
+              </Button>
+              <Button size="sm" variant="outline" disabled={running}
+                onClick={() => runActionPost(`/api/actions/tailor/${job.id}/${job.source}`)}
+                className="h-7 text-xs border-violet-200 text-violet-700 hover:bg-violet-50">
+                Tailor
+              </Button>
               {job.tailored_cv && (
                 <Button
                   size="sm" variant="outline" disabled={running}
@@ -458,9 +478,6 @@ export function JobDetail({ jobRef, onClose, onUpdated, onJobLoaded }: {
                 >
                   Open PDF ↗
                 </a>
-              )}
-              {!job.tailored_cv && (
-                <span className="text-xs text-gray-400 italic">No tailored CV yet — use "Tailor all" in the pipeline bar</span>
               )}
             </div>
 

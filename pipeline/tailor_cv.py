@@ -381,6 +381,18 @@ def fetch_batch(conn, min_score: int, posted_hours: float | None = None) -> list
         return cur.fetchall()
 
 
+def fetch_single(conn, job_id: str) -> list:
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT id, source, position, company, seniority,
+                   requirements_must, requirements_nice, job_description,
+                   fit_score, fit_notes, cv_variant
+            FROM jobs
+            WHERE id = %s
+        """, (job_id,))
+        return cur.fetchall()
+
+
 def update_job(conn, job_id: str, source: str, tailored_cv: str):
     with conn.cursor() as cur:
         cur.execute("""
@@ -423,6 +435,8 @@ def main():
                         help=f'Minimum fit_score to tailor (default: {MIN_SCORE_DEFAULT})')
     parser.add_argument('--posted-within', type=float, default=None,
                         help='Only tailor jobs posted within this many hours')
+    parser.add_argument('--job-id', type=str, default=None,
+                        help='Tailor CV for a single job by ID')
     args = parser.parse_args()
 
     client = OpenAI(
@@ -431,6 +445,41 @@ def main():
     )
 
     conn = get_connection()
+
+    if args.job_id:
+        batch = fetch_single(conn, args.job_id)
+        if not batch:
+            print(f"❌  Job '{args.job_id}' not found")
+            conn.close()
+            return
+        job = batch[0]
+        score = job.get('fit_score', 0)
+        cv_variant = job.get('cv_variant', 'crp') or 'crp'
+        position = job.get('position', 'N/A')
+        company = job.get('company', 'N/A')
+        print(f"🚀  Tailoring single job: [{score}] {company} — {position} [{cv_variant}]\n")
+
+        must_raw = job.get('requirements_must') or '[]'
+        if isinstance(must_raw, str):
+            try: requirements = json.loads(must_raw)
+            except: requirements = [must_raw]
+        else:
+            requirements = must_raw or []
+
+        summary = parse_summary_from_md(cv_variant)
+        llm_result, error = llm_tailor(client, job, summary)
+        if error:
+            print(f"  ❌  {error}")
+            update_job(conn, job['id'], job['source'], json.dumps({'error': error}))
+        else:
+            tailored_json, added_skills = build_tailored_json(cv_variant, llm_result, requirements)
+            update_job(conn, job['id'], job['source'], tailored_json)
+            title = llm_result.get('title', '?')
+            print(f'  ✅  title: "{title}" | +skills: {added_skills if added_skills else "none"}')
+        print(f"\n✅  Done.")
+        conn.close()
+        return
+
     remaining = count_remaining(conn, args.min_score, args.posted_within)
     print(f'🎯  Jobs eligible (scored, fit_score >= {args.min_score}): {remaining}')
     if args.limit:
