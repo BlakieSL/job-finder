@@ -156,13 +156,19 @@ def posted_within_clause(hours: float | None) -> str:
     return f" AND posted_at >= DATE(DATE_SUB(NOW(), INTERVAL {hours} HOUR))"
 
 
-def fetch_batch(conn, posted_hours: float | None = None) -> list:
+def language_clause(lang: str | None) -> str:
+    if lang is None:
+        return ""
+    return f" AND language = '{lang}'"
+
+
+def fetch_batch(conn, posted_hours: float | None = None, lang: str | None = None) -> list:
     with conn.cursor() as cur:
         cur.execute(f"""
             SELECT id, source, position, company, seniority,
                    requirements_must, requirements_nice, job_description
             FROM jobs
-            WHERE status = 'new'{posted_within_clause(posted_hours)}
+            WHERE status = 'new'{posted_within_clause(posted_hours)}{language_clause(lang)}
             LIMIT %s
         """, (BATCH_SIZE,))
         return cur.fetchall()
@@ -247,6 +253,8 @@ def main():
                         help='Only score jobs posted within this many hours')
     parser.add_argument('--job-id', type=str, default=None,
                         help='Score a single job by ID (any status)')
+    parser.add_argument('--language', type=str, default=None,
+                        help='Only score jobs in this language (en or pl)')
     args = parser.parse_args()
 
     if not DEEPSEEK_API_KEY:
@@ -285,10 +293,12 @@ def main():
     batch_num = 0
 
     label = f" (posted within {args.posted_within}h)" if args.posted_within else ""
+    if args.language:
+        label += f" (language={args.language})"
     print(f"🚀  Starting scoring{label}...\n")
 
     while True:
-        batch = fetch_batch(conn, args.posted_within)
+        batch = fetch_batch(conn, args.posted_within, args.language)
         if not batch:
             break
 

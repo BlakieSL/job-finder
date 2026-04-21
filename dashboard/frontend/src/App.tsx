@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { } from "react"
 import { JobsPage } from "./pages/JobsPage"
 
 export default function App() {

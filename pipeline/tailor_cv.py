@@ -385,14 +385,20 @@ def posted_within_clause(hours: float | None) -> str:
     return f" AND posted_at >= DATE(DATE_SUB(NOW(), INTERVAL {hours} HOUR))"
 
 
-def fetch_batch(conn, min_score: int, posted_hours: float | None = None) -> list:
+def language_clause(lang: str | None) -> str:
+    if lang is None:
+        return ""
+    return f" AND language = '{lang}'"
+
+
+def fetch_batch(conn, min_score: int, posted_hours: float | None = None, lang: str | None = None) -> list:
     with conn.cursor() as cur:
         cur.execute(f"""
             SELECT id, source, position, company, seniority,
                    requirements_must, requirements_nice, job_description,
                    fit_score, fit_notes, cv_variant
             FROM jobs
-            WHERE status = 'scored' AND fit_score >= %s{posted_within_clause(posted_hours)}
+            WHERE status = 'scored' AND fit_score >= %s{posted_within_clause(posted_hours)}{language_clause(lang)}
             ORDER BY fit_score DESC
             LIMIT %s
         """, (min_score, BATCH_SIZE))
@@ -432,12 +438,12 @@ def verify_update(conn, job_id: str, source: str) -> dict | None:
         return cur.fetchone()
 
 
-def count_remaining(conn, min_score: int, posted_hours: float | None = None) -> int:
+def count_remaining(conn, min_score: int, posted_hours: float | None = None, lang: str | None = None) -> int:
     with conn.cursor() as cur:
         cur.execute(f"""
             SELECT COUNT(*) AS cnt
             FROM jobs
-            WHERE status = 'scored' AND fit_score >= %s{posted_within_clause(posted_hours)}
+            WHERE status = 'scored' AND fit_score >= %s{posted_within_clause(posted_hours)}{language_clause(lang)}
         """, (min_score,))
         row = cur.fetchone()
         return row['cnt'] if row else 0
@@ -455,6 +461,8 @@ def main():
                         help='Only tailor jobs posted within this many hours')
     parser.add_argument('--job-id', type=str, default=None,
                         help='Tailor CV for a single job by ID')
+    parser.add_argument('--language', type=str, default=None,
+                        help='Only tailor jobs in this language (en or pl)')
     args = parser.parse_args()
 
     client = OpenAI(
@@ -498,7 +506,7 @@ def main():
         conn.close()
         return
 
-    remaining = count_remaining(conn, args.min_score, args.posted_within)
+    remaining = count_remaining(conn, args.min_score, args.posted_within, args.language)
     print(f'🎯  Jobs eligible (scored, fit_score >= {args.min_score}): {remaining}')
     if args.limit:
         print(f'    Processing at most: {args.limit}')
@@ -520,7 +528,7 @@ def main():
         if args.limit and total_tailored + total_errors >= args.limit:
             break
 
-        batch = fetch_batch(conn, args.min_score, args.posted_within)
+        batch = fetch_batch(conn, args.min_score, args.posted_within, args.language)
         if not batch:
             break
 

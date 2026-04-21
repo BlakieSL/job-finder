@@ -121,6 +121,10 @@ Page text:
     slug = url.rstrip('/').split('/')[-1]
     job_id = re.sub(r'[^\w\-]', '_', slug)[:200]
 
+    description = data.get('job_description', '')
+    from justjoinit_scraper import detect_language
+    language = detect_language(description, {})
+
     return {
         'id': job_id,
         'position': data.get('position', 'Unknown'),
@@ -132,7 +136,8 @@ Page text:
         'requirements_must': data.get('requirements_must', []),
         'requirements_nice': data.get('requirements_nice', []),
         'extra_details': {'source_domain': domain},
-        'job_description': data.get('job_description', ''),
+        'job_description': description,
+        'language': language,
         'url': url,
     }
 
@@ -151,11 +156,11 @@ def upsert_job(conn, job: dict, source: str) -> bool:
             INSERT IGNORE INTO jobs
                 (id, source, position, company, seniority, salary,
                  expires_at, scraped_at, posted_at, requirements_must, requirements_nice,
-                 extra_details, job_description, url)
+                 extra_details, job_description, language, url)
             VALUES
                 (%s, %s, %s, %s, %s, %s,
                  %s, %s, %s, %s, %s,
-                 %s, %s, %s)
+                 %s, %s, %s, %s)
         """, (
             job['id'],
             source,
@@ -170,6 +175,7 @@ def upsert_job(conn, job: dict, source: str) -> bool:
             json.dumps(job.get('requirements_nice', []), ensure_ascii=False),
             json.dumps(job.get('extra_details', {}), ensure_ascii=False),
             job.get('job_description'),
+            job.get('language', 'en'),
             job['url'],
         ))
     conn.commit()

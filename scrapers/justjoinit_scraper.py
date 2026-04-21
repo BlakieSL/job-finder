@@ -63,6 +63,21 @@ def format_salary(employment_types: list) -> str:
     return ' | '.join(parts) if parts else 'Not disclosed'
 
 
+POLISH_MARKERS = re.compile(
+    r'[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]'
+    r'|(?<!\w)(?:wymagania|doświadczenie|praca|zespół|aplikuj|obowiązki|umiejętności|znajomość'
+    r'|wynagrodzenie|oferujemy|oczekujemy|zapewniamy|poszukujemy|stanowisko)(?!\w)',
+    re.IGNORECASE,
+)
+
+
+def detect_language(job_description: str, extra_details: dict) -> str:
+    if not job_description:
+        return 'en'
+    hits = len(POLISH_MARKERS.findall(job_description[:3000]))
+    return 'pl' if hits >= 3 else 'en'
+
+
 def strip_html(html: str) -> str:
     """Strip HTML tags from job body, preserving structure with newlines."""
     if not html:
@@ -128,6 +143,14 @@ def map_job(offer: dict, detail: dict) -> dict:
         except ValueError:
             pass
 
+    posted_at = None
+    raw_posted = offer.get('publishedAt') or detail.get('publishedAt', '')
+    if raw_posted:
+        try:
+            posted_at = datetime.fromisoformat(raw_posted.replace('Z', '+00:00')).date()
+        except ValueError:
+            pass
+
     extra_details = {
         'workplaceType': offer.get('workplaceType'),
         'workingTime': offer.get('workingTime'),
@@ -141,6 +164,9 @@ def map_job(offer: dict, detail: dict) -> dict:
     raw_seniority = (offer.get('experienceLevel') or '').strip()
     seniority = ', '.join(w.capitalize() for w in raw_seniority.split(','))
 
+    job_description = strip_html(detail.get('body', ''))
+    language = detect_language(job_description, extra_details)
+
     return {
         'id': slug,
         'position': offer.get('title'),
@@ -148,10 +174,12 @@ def map_job(offer: dict, detail: dict) -> dict:
         'seniority': seniority or None,
         'salary': format_salary(offer.get('employmentTypes', [])),
         'expires_at': expires_at,
+        'posted_at': posted_at,
         'requirements_must': [s['name'] for s in offer.get('requiredSkills', [])],
         'requirements_nice': [s['name'] for s in offer.get('niceToHaveSkills', [])],
         'extra_details': extra_details,
-        'job_description': strip_html(detail.get('body', '')),
+        'job_description': job_description,
+        'language': language,
         'url': JOB_URL.format(slug=slug),
     }
 
@@ -162,12 +190,12 @@ def upsert_job(conn, job: dict) -> bool:
         rows = cur.execute("""
             INSERT IGNORE INTO jobs
                 (id, source, position, company, seniority, salary,
-                 expires_at, scraped_at, requirements_must, requirements_nice,
-                 extra_details, job_description, url)
+                 expires_at, scraped_at, posted_at, requirements_must, requirements_nice,
+                 extra_details, job_description, language, url)
             VALUES
                 (%s, %s, %s, %s, %s, %s,
-                 %s, %s, %s, %s,
-                 %s, %s, %s)
+                 %s, %s, %s, %s, %s,
+                 %s, %s, %s, %s)
         """, (
             job['id'],
             SOURCE,
@@ -177,10 +205,12 @@ def upsert_job(conn, job: dict) -> bool:
             job.get('salary'),
             job.get('expires_at'),
             date.today(),
+            job.get('posted_at'),
             json.dumps(job.get('requirements_must', []), ensure_ascii=False),
             json.dumps(job.get('requirements_nice', []), ensure_ascii=False),
             json.dumps(job.get('extra_details', {}), ensure_ascii=False),
             job.get('job_description'),
+            job.get('language', 'en'),
             job['url'],
         ))
     conn.commit()
@@ -216,13 +246,30 @@ def ensure_schema(conn):
         migrations = [
             "ALTER TABLE jobs ADD COLUMN fit_score TINYINT UNSIGNED DEFAULT NULL AFTER status",
             "ALTER TABLE jobs ADD COLUMN fit_notes VARCHAR(500) DEFAULT NULL AFTER fit_score",
+            "ALTER TABLE jobs ADD COLUMN posted_at DATE DEFAULT NULL AFTER scraped_at",
+            "ALTER TABLE jobs ADD COLUMN language VARCHAR(10) NOT NULL DEFAULT 'en' AFTER job_description",
         ]
         for sql in migrations:
             try:
                 cur.execute(sql)
             except Exception:
                 pass
+        _backfill_language(cur)
     conn.commit()
+
+
+def _backfill_language(cur):
+    """Classify existing jobs that still have the default 'en' but contain Polish text."""
+    cur.execute("SELECT id, source, job_description FROM jobs WHERE language = 'en' AND job_description IS NOT NULL")
+    rows = cur.fetchall()
+    updated = 0
+    for row in rows:
+        if detect_language(row['job_description'], {}) == 'pl':
+            cur.execute("UPDATE jobs SET language = 'pl' WHERE id = %s AND source = %s",
+                        (row['id'], row['source']))
+            updated += 1
+    if updated:
+        print(f'backfill_language: reclassified {updated} job(s) as Polish.')
 
 
 def normalize_seniority_case(conn):

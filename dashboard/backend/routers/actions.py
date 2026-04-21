@@ -47,8 +47,10 @@ async def action_scrape():
     return StreamingResponse(stream_script("scrapers/scrape_all.py"), media_type="text/event-stream")
 
 @router.post("/actions/score")
-async def action_score(posted_within: float = Query(default=None)):
+async def action_score(posted_within: float = Query(default=None), language: str = Query(default=None)):
     extra = ["--posted-within", str(posted_within)] if posted_within is not None else []
+    if language:
+        extra += ["--language", language]
     return StreamingResponse(stream_script("pipeline/score_jobs.py", extra), media_type="text/event-stream")
 
 @router.post("/actions/score/{job_id}/{source}")
@@ -66,20 +68,24 @@ async def action_tailor_single(job_id: str, source: str):
     )
 
 @router.post("/actions/tailor")
-async def action_tailor(min_score: int = Query(default=59), posted_within: float = Query(default=None)):
+async def action_tailor(min_score: int = Query(default=59), posted_within: float = Query(default=None), language: str = Query(default=None)):
     extra = ["--min-score", str(min_score)]
     if posted_within is not None:
         extra += ["--posted-within", str(posted_within)]
+    if language:
+        extra += ["--language", language]
     return StreamingResponse(
         stream_script("pipeline/tailor_cv.py", extra),
         media_type="text/event-stream"
     )
 
 @router.post("/actions/generate-pdf-batch")
-async def action_generate_pdf_batch(min_score: int = Query(default=59), posted_within: float = Query(default=None)):
+async def action_generate_pdf_batch(min_score: int = Query(default=59), posted_within: float = Query(default=None), language: str = Query(default=None)):
     extra = ["--batch", "--min-score", str(min_score)]
     if posted_within is not None:
         extra += ["--posted-within", str(posted_within)]
+    if language:
+        extra += ["--language", language]
     return StreamingResponse(
         stream_script("pipeline/generate_cv.py", extra),
         media_type="text/event-stream"

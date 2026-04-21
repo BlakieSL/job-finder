@@ -9,13 +9,14 @@ def list_jobs(
     status: str = None,
     source: str = None,
     min_score: int = 0,
-    search: str = None
+    search: str = None,
+    language: str = None,
 ):
     with get_conn() as conn:
         cur = conn.cursor(dictionary=True)
         sql = """
             SELECT id, source, position, company, seniority, salary,
-                   fit_score, status, expires_at, scraped_at, posted_at, url, notes, fit_notes, cv_variant
+                   fit_score, status, expires_at, scraped_at, posted_at, url, notes, fit_notes, cv_variant, language
             FROM jobs WHERE position != 'Not found' AND company != 'Not found'
               AND (fit_score >= %s OR (%s = 0 AND fit_score IS NULL))
         """
@@ -29,6 +30,9 @@ def list_jobs(
         if search:
             sql += " AND (position LIKE %s OR company LIKE %s)"
             params += [f"%{search}%", f"%{search}%"]
+        if language:
+            sql += " AND language = %s"
+            params.append(language)
         sql += " ORDER BY fit_score DESC"
         cur.execute(sql, params)
         rows = cur.fetchall()

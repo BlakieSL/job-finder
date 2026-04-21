@@ -23,6 +23,20 @@ SOURCE = 'nofluffjobs'
 # Known sidebar/noise sections to exclude from extra_details
 EXCLUDED_SECTIONS = {'Perks in office', 'Benefits', 'Udogodnienia w biurze', 'Benefity'}
 
+POLISH_MARKERS = re.compile(
+    r'[ąćęłńóśźżĄĆĘŁŃÓŚŹŻ]'
+    r'|(?<!\w)(?:wymagania|doświadczenie|praca|zespół|aplikuj|obowiązki|umiejętności|znajomość'
+    r'|wynagrodzenie|oferujemy|oczekujemy|zapewniamy|poszukujemy|stanowisko)(?!\w)',
+    re.IGNORECASE,
+)
+
+
+def detect_language(job_description: str) -> str:
+    if not job_description:
+        return 'en'
+    hits = len(POLISH_MARKERS.findall(job_description[:3000]))
+    return 'pl' if hits >= 3 else 'en'
+
 
 # ---------------------------------------------------------------------------
 # DB helpers
@@ -62,13 +76,30 @@ def ensure_schema(conn):
             "ALTER TABLE jobs ADD COLUMN job_description TEXT AFTER extra_details",
             "ALTER TABLE jobs ADD COLUMN fit_score TINYINT UNSIGNED DEFAULT NULL AFTER status",
             "ALTER TABLE jobs ADD COLUMN fit_notes VARCHAR(500) DEFAULT NULL AFTER fit_score",
+            "ALTER TABLE jobs ADD COLUMN posted_at DATE DEFAULT NULL AFTER scraped_at",
+            "ALTER TABLE jobs ADD COLUMN language VARCHAR(10) NOT NULL DEFAULT 'en' AFTER job_description",
         ]
         for sql in migrations:
             try:
                 cur.execute(sql)
             except Exception:
                 pass  # Column already exists — ignore
+        _backfill_language(cur)
     conn.commit()
+
+
+def _backfill_language(cur):
+    """Classify existing jobs that still have the default 'en' but contain Polish text."""
+    cur.execute("SELECT id, source, job_description FROM jobs WHERE language = 'en' AND job_description IS NOT NULL")
+    rows = cur.fetchall()
+    updated = 0
+    for row in rows:
+        if detect_language(row['job_description']) == 'pl':
+            cur.execute("UPDATE jobs SET language = 'pl' WHERE id = %s AND source = %s",
+                        (row['id'], row['source']))
+            updated += 1
+    if updated:
+        print(f'backfill_language: reclassified {updated} job(s) as Polish.')
 
 
 def normalize_seniority_case(conn):
@@ -123,12 +154,12 @@ def upsert_job(conn, job: dict) -> bool:
         rows = cur.execute("""
             INSERT IGNORE INTO jobs
                 (id, source, position, company, seniority, salary,
-                 expires_at, scraped_at, requirements_must, requirements_nice,
-                 extra_details, job_description, url)
+                 expires_at, scraped_at, posted_at, requirements_must, requirements_nice,
+                 extra_details, job_description, language, url)
             VALUES
                 (%s, %s, %s, %s, %s, %s,
-                 %s, %s, %s, %s,
-                 %s, %s, %s)
+                 %s, %s, %s, %s, %s,
+                 %s, %s, %s, %s)
         """, (
             job['id'],
             SOURCE,
@@ -138,10 +169,12 @@ def upsert_job(conn, job: dict) -> bool:
             job.get('salary'),
             expires_at,
             date.today(),
+            job.get('posted_at'),
             json.dumps(job.get('requirements_must', []), ensure_ascii=False),
             json.dumps(job.get('requirements_nice', []), ensure_ascii=False),
             json.dumps(job.get('extra_details', {}), ensure_ascii=False),
             job.get('job_description'),
+            job.get('language', 'en'),
             job['url'],
         ))
     conn.commit()
@@ -189,6 +222,24 @@ def parse_salary_block(block):
         'rate_max': rate_max,
         'currency': currency,
     }
+
+
+def fetch_posted_at(slug: str):
+    """Fetch the posted timestamp from NoFluffJobs API."""
+    try:
+        r = requests.get(
+            f'https://nofluffjobs.com/api/posting/{slug}',
+            headers={'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0'},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            ts = data.get('posted')
+            if ts and isinstance(ts, (int, float)):
+                return datetime.fromtimestamp(ts / 1000).date()
+    except Exception:
+        pass
+    return None
 
 
 def scrape_job_details(url):
@@ -288,6 +339,9 @@ def scrape_job_details(url):
             if key not in EXCLUDED_SECTIONS:
                 extra_details[key] = val_el.text.strip()
 
+    posted_at = fetch_posted_at(job_id)
+    language = detect_language(job_description)
+
     return {
         'id': job_id,
         'position': job_title,
@@ -295,10 +349,12 @@ def scrape_job_details(url):
         'seniority': seniority,
         'salary': salary,
         'expires_at': expires_at,
+        'posted_at': posted_at,
         'requirements_must': requirements_must,
         'requirements_nice': requirements_nice,
         'extra_details': extra_details,
         'job_description': job_description,
+        'language': language,
         'url': url,
     }
 

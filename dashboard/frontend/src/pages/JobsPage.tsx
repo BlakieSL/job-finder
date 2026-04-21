@@ -6,6 +6,7 @@ type Job = {
   id: string; source: string; position: string; company: string
   seniority: string; salary: string; fit_score: number | null
   status: string; expires_at: string; posted_at: string | null; url: string
+  language: string
 }
 type Stats = Record<string, number>
 type JobRef = { id: string; source: string } | null
@@ -115,10 +116,11 @@ const POSTED_OPTIONS: { label: string; hours: string }[] = [
 
 function ActionPopover({ label, color, dot, showMinScore, onRun, onClose }: {
   label: string; color: string; dot: string
-  showMinScore: boolean; onRun: (minScore: number, postedHours: string) => void; onClose: () => void
+  showMinScore: boolean; onRun: (minScore: number, postedHours: string, language: string) => void; onClose: () => void
 }) {
   const [minScore, setMinScore] = useState(59)
   const [postedHours, setPostedHours] = useState("")
+  const [language, setLanguage] = useState("en")
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -142,7 +144,7 @@ function ActionPopover({ label, color, dot, showMinScore, onRun, onClose }: {
         </div>
       )}
 
-      <div className="flex flex-col gap-0.5 mb-3">
+      <div className="flex flex-col gap-0.5 mb-2">
         <span className="text-xs text-gray-500 mb-0.5">Posted within</span>
         {POSTED_OPTIONS.map(o => (
           <button key={o.hours || "all"} onClick={() => setPostedHours(o.hours)}
@@ -153,7 +155,18 @@ function ActionPopover({ label, color, dot, showMinScore, onRun, onClose }: {
         ))}
       </div>
 
-      <button onClick={() => { onRun(minScore, postedHours); onClose() }}
+      <div className="flex flex-col gap-0.5 mb-3">
+        <span className="text-xs text-gray-500 mb-0.5">Language</span>
+        {[{val: "", lbl: "All"}, {val: "en", lbl: "English"}, {val: "pl", lbl: "Polish"}].map(o => (
+          <button key={o.val || "all"} onClick={() => setLanguage(o.val)}
+            className={`text-xs px-2 py-1 rounded text-left transition-colors
+              ${language === o.val ? "bg-violet-50 text-violet-700 font-medium" : "text-gray-600 hover:bg-gray-50"}`}>
+            {o.lbl}
+          </button>
+        ))}
+      </div>
+
+      <button onClick={() => { onRun(minScore, postedHours, language); onClose() }}
         className={`w-full h-7 text-xs rounded-lg border font-medium flex items-center justify-center gap-1.5 transition-colors ${color}`}>
         <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
         Run {label}
@@ -218,10 +231,11 @@ function GlobalActions({ onDone }: { onDone: () => void }) {
     abortRef.current?.abort()
   }
 
-  function buildUrl(base: string, minScore?: number, postedHours?: string) {
+  function buildUrl(base: string, minScore?: number, postedHours?: string, language?: string) {
     const p = new URLSearchParams()
     if (minScore !== undefined) p.set("min_score", String(minScore))
     if (postedHours) p.set("posted_within", postedHours)
+    if (language) p.set("language", language)
     const qs = p.toString()
     return qs ? `${base}?${qs}` : base
   }
@@ -247,7 +261,7 @@ function GlobalActions({ onDone }: { onDone: () => void }) {
           {openPopover === "score" && (
             <ActionPopover label="Score" color="border-blue-200 text-blue-700 hover:bg-blue-50" dot="bg-blue-500"
               showMinScore={false}
-              onRun={(_ms, ph) => runAction(buildUrl("/api/actions/score", undefined, ph))}
+              onRun={(_ms, ph, lang) => runAction(buildUrl("/api/actions/score", undefined, ph, lang))}
               onClose={() => setOpenPopover(null)} />
           )}
         </div>
@@ -261,7 +275,7 @@ function GlobalActions({ onDone }: { onDone: () => void }) {
           {openPopover === "tailor" && (
             <ActionPopover label="Tailor" color="border-violet-200 text-violet-700 hover:bg-violet-50" dot="bg-violet-500"
               showMinScore={true}
-              onRun={(ms, ph) => runAction(buildUrl("/api/actions/tailor", ms, ph))}
+              onRun={(ms, ph, lang) => runAction(buildUrl("/api/actions/tailor", ms, ph, lang))}
               onClose={() => setOpenPopover(null)} />
           )}
         </div>
@@ -275,7 +289,7 @@ function GlobalActions({ onDone }: { onDone: () => void }) {
           {openPopover === "pdf" && (
             <ActionPopover label="Generate PDFs" color="border-amber-200 text-amber-700 hover:bg-amber-50" dot="bg-amber-500"
               showMinScore={true}
-              onRun={(ms, ph) => runAction(buildUrl("/api/actions/generate-pdf-batch", ms, ph))}
+              onRun={(ms, ph, lang) => runAction(buildUrl("/api/actions/generate-pdf-batch", ms, ph, lang))}
               onClose={() => setOpenPopover(null)} />
           )}
         </div>
@@ -344,16 +358,16 @@ function Navbar({ search, onSearch, sidebarOpen, onToggleSidebar }: {
 
 // ── Sidebar ───────────────────────────────────────────────────────────────────
 function Sidebar({
-  stats, status, seniority, source, minScore, postedWithin,
-  onStatus, onSeniority, onSource, onMinScore, onPostedWithin, onReset,
+  stats, status, seniority, source, minScore, postedWithin, language,
+  onStatus, onSeniority, onSource, onMinScore, onPostedWithin, onLanguage, onReset,
 }: {
   stats: Stats
-  status: string; seniority: string; source: string; minScore: number; postedWithin: string
+  status: string; seniority: string; source: string; minScore: number; postedWithin: string; language: string
   onStatus: (v: string) => void; onSeniority: (v: string) => void
   onSource: (v: string) => void; onMinScore: (v: number) => void; onPostedWithin: (v: string) => void
-  onReset: () => void
+  onLanguage: (v: string) => void; onReset: () => void
 }) {
-  const hasFilters = status || seniority || source || minScore > 0 || postedWithin
+  const hasFilters = status || seniority || source || minScore > 0 || postedWithin || language !== "en"
 
   return (
     <aside className="w-52 shrink-0 flex flex-col gap-4 pt-5 pb-8">
@@ -400,6 +414,20 @@ function Sidebar({
             <button key={val || "all"} onClick={() => onSource(val)}
               className={`flex items-center px-2 py-1.5 rounded-lg text-sm transition-colors
                 ${source === val ? "bg-violet-50 text-violet-700 font-medium" : "text-gray-600 hover:bg-gray-100"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* Language */}
+      <section>
+        <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider px-2 mb-1.5">Language</h3>
+        <div className="flex flex-col gap-0.5">
+          {[["", "All"], ["en", "English"], ["pl", "Polish"]].map(([val, label]) => (
+            <button key={val || "all"} onClick={() => onLanguage(val)}
+              className={`flex items-center px-2 py-1.5 rounded-lg text-sm transition-colors
+                ${language === val ? "bg-violet-50 text-violet-700 font-medium" : "text-gray-600 hover:bg-gray-100"}`}>
               {label}
             </button>
           ))}
@@ -486,6 +514,9 @@ function JobCard({ job, selected, onClick }: { job: Job; selected: boolean; onCl
           )}
         </div>
         <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+          {job.language === "pl" && (
+            <span className="text-xs bg-orange-100 text-orange-600 px-2 py-0.5 rounded-full font-medium">PL</span>
+          )}
           {job.seniority && (
             <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">{job.seniority}</span>
           )}
@@ -543,6 +574,7 @@ export function JobsPage() {
   const [source, setSource] = useState("")
   const [minScore, setMinScore] = useState(0)
   const [postedWithin, setPostedWithin] = useState("")
+  const [language, setLanguage] = useState("en")
   const [sort, setSort] = useState<SortOpt>("fit_score")
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc")
   const [selected, setSelected] = useState<JobRef>(null)
@@ -559,9 +591,10 @@ export function JobsPage() {
     if (status) p.set("status", status)
     if (search) p.set("search", search)
     if (source) p.set("source", source)
+    if (language) p.set("language", language)
     p.set("min_score", String(minScore))
     fetch(`/api/jobs?${p}`).then(r => r.json()).then(setJobs)
-  }, [status, search, source, minScore, refreshKey])
+  }, [status, search, source, minScore, language, refreshKey])
 
   function handleSort(key: SortOpt) {
     if (sort === key) setSortDir(d => d === "asc" ? "desc" : "asc")
@@ -585,7 +618,7 @@ export function JobsPage() {
   function refresh() { setRefreshKey(k => k + 1) }
 
   function resetFilters() {
-    setStatus(""); setSeniority(""); setSource(""); setMinScore(0); setPostedWithin("")
+    setStatus(""); setSeniority(""); setSource(""); setMinScore(0); setPostedWithin(""); setLanguage("en")
   }
 
   return (
@@ -596,9 +629,9 @@ export function JobsPage() {
       <div className="flex max-w-[1600px] mx-auto px-4 gap-6">
         {sidebarOpen && (
           <Sidebar
-            stats={stats} status={status} seniority={seniority} source={source} minScore={minScore} postedWithin={postedWithin}
+            stats={stats} status={status} seniority={seniority} source={source} minScore={minScore} postedWithin={postedWithin} language={language}
             onStatus={setStatus} onSeniority={setSeniority} onSource={setSource}
-            onMinScore={setMinScore} onPostedWithin={setPostedWithin} onReset={resetFilters}
+            onMinScore={setMinScore} onPostedWithin={setPostedWithin} onLanguage={setLanguage} onReset={resetFilters}
           />
         )}
 

@@ -188,12 +188,18 @@ def posted_within_clause(hours: float | None) -> str:
     return f" AND posted_at >= DATE(DATE_SUB(NOW(), INTERVAL {hours} HOUR))"
 
 
-def fetch_tailored_jobs(conn, min_score: int, posted_hours: float | None = None) -> list:
+def language_clause(lang: str | None) -> str:
+    if lang is None:
+        return ""
+    return f" AND language = '{lang}'"
+
+
+def fetch_tailored_jobs(conn, min_score: int, posted_hours: float | None = None, lang: str | None = None) -> list:
     with conn.cursor() as cur:
         cur.execute(f"""
             SELECT id, source, position, company, fit_score, url, tailored_cv, cv_variant
             FROM jobs
-            WHERE status = 'tailored' AND fit_score >= %s{posted_within_clause(posted_hours)}
+            WHERE status = 'tailored' AND fit_score >= %s{posted_within_clause(posted_hours)}{language_clause(lang)}
             ORDER BY fit_score DESC
         """, (min_score,))
         return cur.fetchall()
@@ -218,6 +224,8 @@ def main():
     parser.add_argument('--min-score', type=int, default=59, help='Min fit_score for --batch (default: 59)')
     parser.add_argument('--posted-within', type=float, default=None,
                         help='Only generate for jobs posted within this many hours')
+    parser.add_argument('--language', type=str, default=None,
+                        help='Only generate for jobs in this language (en or pl)')
     parser.add_argument('--list',      action='store_true', help='Print apply list (pdf_ready jobs) without generating')
     parser.add_argument('--open',      action='store_true', help='With --list: open all URLs in browser + open PDF folder')
     parser.add_argument('--variant',   choices=['crp', 'igm'], default='crp',
@@ -265,7 +273,7 @@ def main():
 
     # ── Batch mode ────────────────────────────────────────────────────────────
     if args.batch:
-        jobs = fetch_tailored_jobs(conn, args.min_score, args.posted_within)
+        jobs = fetch_tailored_jobs(conn, args.min_score, args.posted_within, args.language)
         if not jobs:
             print(f'No tailored jobs with fit_score >= {args.min_score}. Run tailor_cv.py first.')
             conn.close()
