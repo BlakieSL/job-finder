@@ -495,7 +495,7 @@ function JobCard({ job, selected, onClick }: { job: Job; selected: boolean; onCl
   return (
     <div onClick={onClick}
       className={`rounded-xl border cursor-pointer transition-all duration-150 p-4 flex gap-3
-        ${job.status === "inactive" ? "bg-red-50/60" : "bg-white"}
+        ${job.status === "inactive" ? "bg-red-50/60" : job.status === "applied" ? "bg-green-50/60" : "bg-white"}
         ${selected ? "border-violet-400 shadow-md ring-1 ring-violet-300" : "border-gray-200 hover:border-gray-300 hover:shadow-sm"}`}>
       <div className={`w-10 h-10 rounded-lg ${avatarColor(job.company)} flex items-center justify-center shrink-0 text-white text-sm font-bold`}>
         {companyInitials(job.company)}
@@ -635,7 +635,7 @@ export function JobsPage() {
           />
         )}
 
-        <main className="flex-1 min-w-0 py-5">
+        <main className={`min-w-0 py-5 ${!sidebarOpen && selected ? "w-[60%] shrink-0" : "flex-1"}`}>
           <GlobalActions onDone={refresh} />
           <SortBar total={displayed.length} sort={sort} dir={sortDir} onSort={handleSort} />
           <div className="flex flex-col gap-2">
@@ -657,7 +657,7 @@ export function JobsPage() {
         </main>
 
         {selected && (
-          <div className={`shrink-0 py-5 transition-all duration-200 ${detailWide ? "w-[55vw] min-w-[700px] max-w-[1000px]" : "w-[400px]"}`}>
+          <div className={`shrink-0 py-5 transition-all duration-200 ${!sidebarOpen ? (detailWide ? "w-[55vw] min-w-[700px] max-w-[1000px]" : "w-[40%]") : (detailWide ? "w-[55vw] min-w-[700px] max-w-[1000px]" : "w-[400px]")}`}>
             <div className="sticky top-20">
               <JobDetail
                 jobRef={selected}

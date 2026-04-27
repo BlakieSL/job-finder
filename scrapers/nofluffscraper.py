@@ -227,23 +227,41 @@ def parse_salary_block(block):
 def fetch_posted_at(slug: str):
     """Fetch the posted timestamp from NoFluffJobs API."""
     try:
-        r = requests.get(
+        r = _get_with_retry(
             f'https://nofluffjobs.com/api/posting/{slug}',
             headers={'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0'},
-            timeout=10,
         )
-        if r.status_code == 200:
-            data = r.json()
-            ts = data.get('posted')
-            if ts and isinstance(ts, (int, float)):
-                return datetime.fromtimestamp(ts / 1000).date()
+        data = r.json()
+        ts = data.get('posted')
+        if ts and isinstance(ts, (int, float)):
+            return datetime.fromtimestamp(ts / 1000).date()
     except Exception:
         pass
     return None
 
 
+REQUEST_HEADERS = {'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'en'}
+REQUEST_DELAY = 2  # seconds between detail page requests
+MAX_RETRIES = 4
+
+
+def _get_with_retry(url, **kwargs):
+    kwargs.setdefault('headers', REQUEST_HEADERS)
+    kwargs.setdefault('timeout', 15)
+    for attempt in range(MAX_RETRIES):
+        r = requests.get(url, **kwargs)
+        if r.status_code != 429:
+            r.raise_for_status()
+            return r
+        wait = 2 ** attempt * 3  # 3, 6, 12, 24s
+        print(f'  429 Too Many Requests — retrying in {wait}s (attempt {attempt + 1}/{MAX_RETRIES})')
+        time.sleep(wait)
+    r.raise_for_status()
+    return r
+
+
 def scrape_job_details(url):
-    response = requests.get(url)
+    response = _get_with_retry(url)
     soup = BeautifulSoup(response.content, 'html.parser')
 
     # ID = slug from URL, e.g. "senior-java-developer-link-group-warszawa-9"
@@ -425,10 +443,12 @@ def main():
 
     for url in search_urls:
         new_links = scrape_listings(driver, url, base_url, scraped_links)
-        for link in new_links:
+        for i, link in enumerate(new_links):
             scraped_links.add(link)
             job_url = f'{base_url}{link}'
             print(f'Scraping: {job_url}')
+            if i > 0:
+                time.sleep(REQUEST_DELAY)
             job = scrape_job_details(job_url)
             if upsert_job(conn, job):
                 inserted += 1
