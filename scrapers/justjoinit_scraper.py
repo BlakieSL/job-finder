@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import time
+import random
 import requests
 import pymysql
 import pymysql.cursors
@@ -16,15 +17,23 @@ DB_CONFIG = {**_DB_BASE, 'cursorclass': pymysql.cursors.DictCursor}
 
 SOURCE = 'justjoinit'
 
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+]
 HEADERS = {
     'x-api-version': '1',
     'accept': 'application/json, text/plain, */*',
-    'User-Agent': (
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-        'AppleWebKit/537.36 (KHTML, like Gecko) '
-        'Chrome/122.0.0.0 Safari/537.36'
-    ),
+    'User-Agent': random.choice(USER_AGENTS),
 }
+REQUEST_DELAY_MIN = 1.0
+REQUEST_DELAY_MAX = 2.5
+BATCH_PAUSE_EVERY = 50
+BATCH_PAUSE_SECONDS = 10
+MAX_RETRIES = 4
 
 LIST_URL = 'https://justjoin.it/api/candidate-api/offers'
 DETAIL_URL = 'https://justjoin.it/api/candidate-api/offers/{slug}'
@@ -94,37 +103,43 @@ def strip_html(html: str) -> str:
 # API
 # ---------------------------------------------------------------------------
 
+def _request_with_retry(url, params=None):
+    headers = {**HEADERS, 'User-Agent': random.choice(USER_AGENTS)}
+    for attempt in range(MAX_RETRIES):
+        r = requests.get(url, headers=headers, params=params, timeout=15)
+        if r.status_code != 429:
+            r.raise_for_status()
+            return r
+        wait = 2 ** attempt * 3
+        print(f'  429 Too Many Requests — retrying in {wait}s (attempt {attempt + 1}/{MAX_RETRIES})')
+        time.sleep(wait)
+    r.raise_for_status()
+    return r
+
+
 def fetch_offers_page(from_cursor: int = 0, items_count: int = 100) -> dict:
     """Fetch one page of offer listings. Returns raw API response dict."""
     params = [
         ('categories', 'java'),
-        ('city', 'Warszawa'),
-        ('cityRadius', '30'),
         ('remoteWorkOptions', 'hybrid'),
         ('remoteWorkOptions', 'office'),
         ('remoteWorkOptions', 'remote'),
-        ('currency', 'pln'),
-        ('experienceLevels', 'junior'),
-        ('experienceLevels', 'mid'),
-        # senior/c_level excluded — API confirmed every JJI job has seniority set,
-        # so no untagged junior/mid jobs are missed by this filter.
+        # No currency filter — was dropping jobs with EUR/USD salary or undisclosed.
+        # No city filter — scrapes all Poland; user willing to relocate.
+        # No seniority filter — AI scorer handles relevance (like NoFluff).
         ('from', from_cursor),
         ('itemsCount', items_count),
         ('orderBy', 'descending'),
         ('sortBy', 'publishedAt'),
         ('keywordType', 'any'),
     ]
-    response = requests.get(LIST_URL, headers=HEADERS, params=params)
-    response.raise_for_status()
-    return response.json()
+    return _request_with_retry(LIST_URL, params=params).json()
 
 
 def fetch_offer_detail(slug: str) -> dict:
     """Fetch full offer detail including body HTML."""
     url = DETAIL_URL.format(slug=slug)
-    response = requests.get(url, headers=HEADERS)
-    response.raise_for_status()
-    return response.json()
+    return _request_with_retry(url).json()
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +182,13 @@ def map_job(offer: dict, detail: dict) -> dict:
     job_description = strip_html(detail.get('body', ''))
     language = detect_language(job_description, extra_details)
 
+    workplace = (offer.get('workplaceType') or '').lower()
+    raw_city = offer.get('city') or ''
+    if workplace == 'remote' or (not raw_city and workplace != 'office'):
+        city = 'Fully Remote'
+    else:
+        city = raw_city or 'Fully Remote'
+
     return {
         'id': slug,
         'position': offer.get('title'),
@@ -180,6 +202,7 @@ def map_job(offer: dict, detail: dict) -> dict:
         'extra_details': extra_details,
         'job_description': job_description,
         'language': language,
+        'city': city,
         'url': JOB_URL.format(slug=slug),
     }
 
@@ -191,11 +214,11 @@ def upsert_job(conn, job: dict) -> bool:
             INSERT IGNORE INTO jobs
                 (id, source, position, company, seniority, salary,
                  expires_at, scraped_at, posted_at, requirements_must, requirements_nice,
-                 extra_details, job_description, language, url)
+                 extra_details, job_description, language, city, url)
             VALUES
                 (%s, %s, %s, %s, %s, %s,
                  %s, %s, %s, %s, %s,
-                 %s, %s, %s, %s)
+                 %s, %s, %s, %s, %s)
         """, (
             job['id'],
             SOURCE,
@@ -211,6 +234,7 @@ def upsert_job(conn, job: dict) -> bool:
             json.dumps(job.get('extra_details', {}), ensure_ascii=False),
             job.get('job_description'),
             job.get('language', 'en'),
+            job.get('city'),
             job['url'],
         ))
     conn.commit()
@@ -248,6 +272,7 @@ def ensure_schema(conn):
             "ALTER TABLE jobs ADD COLUMN fit_notes VARCHAR(500) DEFAULT NULL AFTER fit_score",
             "ALTER TABLE jobs ADD COLUMN posted_at DATE DEFAULT NULL AFTER scraped_at",
             "ALTER TABLE jobs ADD COLUMN language VARCHAR(10) NOT NULL DEFAULT 'en' AFTER job_description",
+            "ALTER TABLE jobs ADD COLUMN city VARCHAR(255) DEFAULT NULL AFTER language",
         ]
         for sql in migrations:
             try:
@@ -336,7 +361,6 @@ def main(limit: int = None):
             if limit is not None and processed >= limit:
                 break
 
-
             slug = offer['slug']
             print(f'  Scraping detail: {slug}')
             try:
@@ -356,7 +380,10 @@ def main(limit: int = None):
                 print(f'  -> already in DB, skipped')
 
             processed += 1
-            time.sleep(0.3)
+            time.sleep(random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX))
+            if processed % BATCH_PAUSE_EVERY == 0:
+                print(f'  -- batch pause ({BATCH_PAUSE_SECONDS}s after {processed} details) --')
+                time.sleep(BATCH_PAUSE_SECONDS)
 
         if limit is not None and processed >= limit:
             break

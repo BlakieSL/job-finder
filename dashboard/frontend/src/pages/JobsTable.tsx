@@ -35,9 +35,10 @@ type Job = {
   status: string
   expires_at: string
   url: string
+  city: string | null
 }
 
-type SortKey = "position" | "company" | "seniority" | "fit_score" | "status" | "expires_at"
+type SortKey = "position" | "company" | "seniority" | "city" | "fit_score" | "status" | "expires_at"
 type SortDir = "asc" | "desc"
 
 function sortJobs(jobs: Job[], key: SortKey, dir: SortDir): Job[] {
@@ -92,6 +93,7 @@ export function JobsTable({ onSelect, refreshKey }: {
   const columns: { label: string; key?: SortKey; className?: string }[] = [
     { label: "Position", key: "position" },
     { label: "Company",  key: "company" },
+    { label: "City",     key: "city" },
     { label: "Seniority",key: "seniority" },
     { label: "Salary" },
     { label: "Score",    key: "fit_score" },
@@ -159,6 +161,7 @@ export function JobsTable({ onSelect, refreshKey }: {
                   <span className="line-clamp-1">{job.position}</span>
                 </td>
                 <td className="py-2.5 px-4 text-gray-700 whitespace-nowrap">{job.company}</td>
+                <td className="py-2.5 px-4 text-gray-500 whitespace-nowrap text-xs">{job.city ?? "—"}</td>
                 <td className="py-2.5 px-4 text-gray-500">{job.seniority}</td>
                 <td className="py-2.5 px-4 text-gray-400 text-xs max-w-[140px]">
                   <span className="line-clamp-1">{job.salary}</span>

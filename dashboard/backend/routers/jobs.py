@@ -16,7 +16,7 @@ def list_jobs(
         cur = conn.cursor(dictionary=True)
         sql = """
             SELECT id, source, position, company, seniority, salary,
-                   fit_score, status, expires_at, scraped_at, posted_at, url, notes, fit_notes, cv_variant, language
+                   fit_score, status, expires_at, scraped_at, posted_at, url, notes, fit_notes, cv_variant, language, city
             FROM jobs WHERE position != 'Not found' AND company != 'Not found'
               AND (fit_score >= %s OR (%s = 0 AND fit_score IS NULL))
         """

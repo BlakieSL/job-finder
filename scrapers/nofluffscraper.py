@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import time
+import random
 import requests
 import pymysql
 import pymysql.cursors
@@ -78,6 +79,7 @@ def ensure_schema(conn):
             "ALTER TABLE jobs ADD COLUMN fit_notes VARCHAR(500) DEFAULT NULL AFTER fit_score",
             "ALTER TABLE jobs ADD COLUMN posted_at DATE DEFAULT NULL AFTER scraped_at",
             "ALTER TABLE jobs ADD COLUMN language VARCHAR(10) NOT NULL DEFAULT 'en' AFTER job_description",
+            "ALTER TABLE jobs ADD COLUMN city VARCHAR(255) DEFAULT NULL AFTER language",
         ]
         for sql in migrations:
             try:
@@ -155,11 +157,11 @@ def upsert_job(conn, job: dict) -> bool:
             INSERT IGNORE INTO jobs
                 (id, source, position, company, seniority, salary,
                  expires_at, scraped_at, posted_at, requirements_must, requirements_nice,
-                 extra_details, job_description, language, url)
+                 extra_details, job_description, language, city, url)
             VALUES
                 (%s, %s, %s, %s, %s, %s,
                  %s, %s, %s, %s, %s,
-                 %s, %s, %s, %s)
+                 %s, %s, %s, %s, %s)
         """, (
             job['id'],
             SOURCE,
@@ -175,6 +177,7 @@ def upsert_job(conn, job: dict) -> bool:
             json.dumps(job.get('extra_details', {}), ensure_ascii=False),
             job.get('job_description'),
             job.get('language', 'en'),
+            job.get('city'),
             job['url'],
         ))
     conn.commit()
@@ -240,13 +243,24 @@ def fetch_posted_at(slug: str):
     return None
 
 
-REQUEST_HEADERS = {'User-Agent': 'Mozilla/5.0', 'Accept-Language': 'en'}
-REQUEST_DELAY = 2  # seconds between detail page requests
+USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+]
+REQUEST_HEADERS = {'User-Agent': random.choice(USER_AGENTS), 'Accept-Language': 'en'}
+REQUEST_DELAY_MIN = 2.5  # seconds between detail page requests
+REQUEST_DELAY_MAX = 5.0
+BATCH_PAUSE_EVERY = 40
+BATCH_PAUSE_SECONDS = 15
 MAX_RETRIES = 4
 
 
 def _get_with_retry(url, **kwargs):
-    kwargs.setdefault('headers', REQUEST_HEADERS)
+    headers = {**REQUEST_HEADERS, 'User-Agent': random.choice(USER_AGENTS)}
+    kwargs.setdefault('headers', headers)
     kwargs.setdefault('timeout', 15)
     for attempt in range(MAX_RETRIES):
         r = requests.get(url, **kwargs)
@@ -258,6 +272,30 @@ def _get_with_retry(url, **kwargs):
         time.sleep(wait)
     r.raise_for_status()
     return r
+
+
+def _extract_city(soup, extra_details: dict) -> str:
+    """Derive city from the posting page. Returns 'Fully Remote' when applicable."""
+    location_el = soup.find('li', id='posting-remote')
+    if location_el:
+        text = location_el.get_text(' ', strip=True).lower()
+        if 'fully remote' in text or '100% remote' in text or 'w pełni zdalnie' in text:
+            return 'Fully Remote'
+
+    location_el = soup.find('li', id='posting-location')
+    if location_el:
+        city_text = location_el.get_text(strip=True)
+        city_text = re.sub(r'\s*\+\d+.*', '', city_text).strip()
+        if city_text:
+            return city_text
+
+    loc = extra_details.get('Location') or extra_details.get('Lokalizacja') or ''
+    if loc:
+        loc = re.sub(r'\s*\+\d+.*', '', loc).strip()
+        if loc:
+            return loc
+
+    return 'Fully Remote'
 
 
 def scrape_job_details(url):
@@ -360,6 +398,8 @@ def scrape_job_details(url):
     posted_at = fetch_posted_at(job_id)
     language = detect_language(job_description)
 
+    city = _extract_city(soup, extra_details)
+
     return {
         'id': job_id,
         'position': job_title,
@@ -373,6 +413,7 @@ def scrape_job_details(url):
         'extra_details': extra_details,
         'job_description': job_description,
         'language': language,
+        'city': city,
         'url': url,
     }
 
@@ -385,13 +426,26 @@ def scrape_listings(driver, url, base_url, scraped_links):
         EC.presence_of_element_located((By.CSS_SELECTOR, 'nfj-postings-list[listname="search"] a[href*="/job/"]'))
     )
 
+    prev_count = 0
+    stale_rounds = 0
     while True:
         try:
             button = WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, 'button[nfjloadmore]'))
             )
             driver.execute_script("arguments[0].scrollIntoView(); arguments[0].click();", button)
-            time.sleep(3)
+            time.sleep(2)
+            cur_count = driver.execute_script(
+                "return document.querySelectorAll('nfj-postings-list[listname=\"search\"] a[href*=\"/job/\"]').length"
+            )
+            if cur_count == prev_count:
+                stale_rounds += 1
+                if stale_rounds >= 3:
+                    break
+                time.sleep(2)
+            else:
+                stale_rounds = 0
+                prev_count = cur_count
         except:
             break
 
@@ -417,17 +471,15 @@ def scrape_listings(driver, url, base_url, scraped_links):
 def main():
     base_url = 'https://nofluffjobs.com'
     search_urls = [
-        # Warsaw office/on-site (added — was missing before)
-        'https://nofluffjobs.com/pl/warszawa/Java?lang=en',
-        # Remote — all Poland (catches remote jobs not city-tagged as Warsaw)
+        # All Poland — on-site + hybrid (no city filter)
+        'https://nofluffjobs.com/pl/Java?lang=en',
+        # Remote — all Poland
         'https://nofluffjobs.com/pl/praca-zdalna/Java?lang=en',
-        # Remote — city=Warsaw explicitly
-        'https://nofluffjobs.com/pl/praca-zdalna/Java?criteria=city%3Dwarszawa&lang=en',
-        # Hybrid Warsaw
-        'https://nofluffjobs.com/pl/hybrid/Java?criteria=city%3Dwarszawa&lang=en',
+        # Hybrid — all Poland
+        'https://nofluffjobs.com/pl/hybrid/Java?lang=en',
     ]
-    # Seniority filter intentionally removed — NoFluff has jobs with no seniority tag
-    # that would be silently skipped. AI scorer handles seniority relevance.
+    # No seniority filter — AI scorer handles relevance.
+    # No city filter — scrapes all Poland; user willing to relocate.
     # Duplicates across URLs are handled by INSERT IGNORE on unique url key.
 
     print('Connecting to MySQL...')
@@ -441,6 +493,7 @@ def main():
     inserted = 0
     skipped = 0
 
+    detail_count = 0
     for url in search_urls:
         new_links = scrape_listings(driver, url, base_url, scraped_links)
         for i, link in enumerate(new_links):
@@ -448,7 +501,11 @@ def main():
             job_url = f'{base_url}{link}'
             print(f'Scraping: {job_url}')
             if i > 0:
-                time.sleep(REQUEST_DELAY)
+                time.sleep(random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX))
+            detail_count += 1
+            if detail_count % BATCH_PAUSE_EVERY == 0:
+                print(f'  -- batch pause ({BATCH_PAUSE_SECONDS}s after {detail_count} details) --')
+                time.sleep(BATCH_PAUSE_SECONDS)
             job = scrape_job_details(job_url)
             if upsert_job(conn, job):
                 inserted += 1

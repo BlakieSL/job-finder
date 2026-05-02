@@ -43,7 +43,13 @@ async def action_add_from_url(url: str = Query(...)):
     )
 
 @router.post("/actions/scrape")
-async def action_scrape():
+async def action_scrape(platform: str = Query(default=None)):
+    if platform == "justjoinit":
+        return StreamingResponse(stream_script("scrapers/justjoinit_scraper.py"), media_type="text/event-stream")
+    elif platform == "nofluffjobs":
+        return StreamingResponse(stream_script("scrapers/nofluffscraper.py"), media_type="text/event-stream")
+    elif platform == "pracuj":
+        return StreamingResponse(stream_script("scrapers/pracuj_scraper.py"), media_type="text/event-stream")
     return StreamingResponse(stream_script("scrapers/scrape_all.py"), media_type="text/event-stream")
 
 @router.post("/actions/score")

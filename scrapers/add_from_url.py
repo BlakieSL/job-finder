@@ -156,11 +156,11 @@ def upsert_job(conn, job: dict, source: str) -> bool:
             INSERT IGNORE INTO jobs
                 (id, source, position, company, seniority, salary,
                  expires_at, scraped_at, posted_at, requirements_must, requirements_nice,
-                 extra_details, job_description, language, url)
+                 extra_details, job_description, language, city, url)
             VALUES
                 (%s, %s, %s, %s, %s, %s,
                  %s, %s, %s, %s, %s,
-                 %s, %s, %s, %s)
+                 %s, %s, %s, %s, %s)
         """, (
             job['id'],
             source,
@@ -176,6 +176,7 @@ def upsert_job(conn, job: dict, source: str) -> bool:
             json.dumps(job.get('extra_details', {}), ensure_ascii=False),
             job.get('job_description'),
             job.get('language', 'en'),
+            job.get('city'),
             job['url'],
         ))
     conn.commit()

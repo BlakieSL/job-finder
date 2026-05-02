@@ -74,7 +74,7 @@ type FullJob = {
   fit_notes: string | null; status: string; job_description: string
   requirements_must: string[]; requirements_nice: string[]
   tailored_cv: string | null; notes: string | null
-  url: string; expires_at: string
+  url: string; expires_at: string; city: string | null
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -178,7 +178,7 @@ export function JobDetail({ jobRef, onClose, onUpdated, onJobLoaded }: {
           {job ? (
             <>
               <h2 className="font-semibold text-gray-900 text-sm leading-snug">{job.position}</h2>
-              <p className="text-xs text-gray-500 mt-0.5">{job.company} · {job.seniority}</p>
+              <p className="text-xs text-gray-500 mt-0.5">{job.company} · {job.city ?? "—"} · {job.seniority}</p>
             </>
           ) : (
             <div className="h-8 bg-gray-100 rounded animate-pulse" />

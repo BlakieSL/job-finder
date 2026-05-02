@@ -1,8 +1,7 @@
 """
 scrape_all.py
 -------------
-Runs all scrapers sequentially: JustJoinIT first (fast, API-based),
-then NoFluffJobs (slower, Selenium-based).
+Runs all scrapers in parallel (JustJoinIT + NoFluffJobs + Pracuj.pl).
 
 Usage:
     python scrape_all.py            # full run
@@ -10,11 +9,33 @@ Usage:
 """
 
 import argparse
-import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import justjoinit_scraper
 import nofluffscraper
+import pracuj_scraper
+
+
+def _run_justjoinit(limit):
+    print('=' * 60)
+    print('  SCRAPER — JustJoinIT (parallel)')
+    print('=' * 60)
+    justjoinit_scraper.main(limit=limit)
+
+
+def _run_nofluffjobs():
+    print('=' * 60)
+    print('  SCRAPER — NoFluffJobs (parallel)')
+    print('=' * 60)
+    nofluffscraper.main()
+
+
+def _run_pracuj():
+    print('=' * 60)
+    print('  SCRAPER — Pracuj.pl (parallel)')
+    print('=' * 60)
+    pracuj_scraper.main()
 
 
 def main():
@@ -25,25 +46,18 @@ def main():
 
     total_start = time.time()
 
-    # ── 1. JustJoinIT ─────────────────────────────────────────────────────────
-    print('=' * 60)
-    print('  SCRAPER 1/2 — JustJoinIT')
-    print('=' * 60)
-    try:
-        justjoinit_scraper.main(limit=args.limit)
-    except Exception as e:
-        print(f'ERROR in JustJoinIT scraper: {e}')
-
-    print()
-
-    # ── 2. NoFluffJobs ────────────────────────────────────────────────────────
-    print('=' * 60)
-    print('  SCRAPER 2/2 — NoFluffJobs')
-    print('=' * 60)
-    try:
-        nofluffscraper.main()
-    except Exception as e:
-        print(f'ERROR in NoFluffJobs scraper: {e}')
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {
+            pool.submit(_run_justjoinit, args.limit): 'JustJoinIT',
+            pool.submit(_run_nofluffjobs): 'NoFluffJobs',
+            pool.submit(_run_pracuj): 'Pracuj.pl',
+        }
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                future.result()
+            except Exception as e:
+                print(f'ERROR in {name} scraper: {e}')
 
     elapsed = time.time() - total_start
     print()
