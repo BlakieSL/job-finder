@@ -22,9 +22,9 @@ import json
 import os
 import re
 import sys
-import time
 import pymysql
 import pymysql.cursors
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from openai import OpenAI
 from pathlib import Path
 
@@ -35,7 +35,7 @@ from config import DEEPSEEK_API_KEY, DB_CONFIG as _DB_BASE
 # CONFIG
 # ---------------------------------------------------------------------------
 BATCH_SIZE        = 10
-SLEEP_BETWEEN_CALLS = 0.7
+WORKERS           = 5
 MIN_SCORE_DEFAULT = 59
 
 DB_CONFIG = {**_DB_BASE, 'cursorclass': pymysql.cursors.DictCursor}
@@ -522,7 +522,38 @@ def main():
     batch_num      = 0
     report_rows    = []
 
-    print('🚀  Starting tailoring...\n')
+    print(f'🚀  Starting tailoring ({WORKERS} workers)...\n')
+
+    def tailor_one(job: dict) -> tuple[dict, str, str, list, str]:
+        """Tailor a single job. Returns (job, title, tailored_json, added_skills, error). Uses own DB conn."""
+        cv_variant = job.get('cv_variant', 'crp') or 'crp'
+
+        must_raw = job.get('requirements_must') or '[]'
+        if isinstance(must_raw, str):
+            try: requirements = json.loads(must_raw)
+            except: requirements = [must_raw]
+        else:
+            requirements = must_raw or []
+
+        summary = parse_summary_from_md(cv_variant)
+        llm_result, error = llm_tailor(client, job, summary, cv_variant)
+
+        thread_conn = get_connection()
+        try:
+            if error:
+                update_job(thread_conn, job['id'], job['source'], json.dumps({'error': error}))
+                return job, '', '', [], error
+
+            tailored_json, added_skills = build_tailored_json(cv_variant, llm_result, requirements)
+            update_job(thread_conn, job['id'], job['source'], tailored_json)
+            verified = verify_update(thread_conn, job['id'], job['source'])
+            title = llm_result.get('title', '?')
+
+            if not verified or verified['status'] != 'tailored':
+                return job, title, tailored_json, added_skills, 'DB verify failed'
+            return job, title, tailored_json, added_skills, ''
+        finally:
+            thread_conn.close()
 
     while True:
         if args.limit and total_tailored + total_errors >= args.limit:
@@ -532,57 +563,32 @@ def main():
         if not batch:
             break
 
+        if args.limit:
+            remaining = args.limit - total_tailored - total_errors
+            batch = batch[:remaining]
+
         batch_num += 1
         print(f'── Batch {batch_num} ({len(batch)} jobs) ──────────────────────────')
 
-        for job in batch:
-            if args.limit and total_tailored + total_errors >= args.limit:
-                break
+        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+            futures = {pool.submit(tailor_one, job): job for job in batch}
+            for future in as_completed(futures):
+                job, title, tailored_json, added_skills, error = future.result()
+                position = job.get('position', 'N/A')
+                company = job.get('company', 'N/A')
+                score = job.get('fit_score', 0)
+                cv_variant = job.get('cv_variant', 'crp') or 'crp'
 
-            job_id     = job['id']
-            source     = job['source']
-            position   = job.get('position', 'N/A')
-            company    = job.get('company',  'N/A')
-            score      = job.get('fit_score', 0)
-            cv_variant = job.get('cv_variant', 'crp') or 'crp'
+                print(f'  ✍️   [{score:>3}] {company} — {position} [{cv_variant}]')
 
-            # Parse requirements
-            must_raw = job.get('requirements_must') or '[]'
-            if isinstance(must_raw, str):
-                try: requirements = json.loads(must_raw)
-                except: requirements = [must_raw]
-            else:
-                requirements = must_raw or []
-
-            print(f'  ✍️   [{score:>3}] {company} — {position} [{cv_variant}]')
-
-            # Get LLM decisions (title, first sentence, extra skills)
-            summary = parse_summary_from_md(cv_variant)
-            llm_result, error = llm_tailor(client, job, summary, cv_variant)
-
-            if error:
-                total_errors += 1
-                print(f'       ❌  {error}')
-                update_job(conn, job_id, source, json.dumps({'error': error}))
-                report_rows.append((score, company, position, 'error ✗'))
-            else:
-                # Build tailored data
-                tailored_json, added_skills = build_tailored_json(cv_variant, llm_result, requirements)
-                update_job(conn, job_id, source, tailored_json)
-                verified = verify_update(conn, job_id, source)
-
-                title = llm_result.get('title', '?')
-
-                if verified and verified['status'] == 'tailored':
+                if error:
+                    total_errors += 1
+                    print(f'       ❌  {error}')
+                    report_rows.append((score, company, position, 'error ✗'))
+                else:
                     total_tailored += 1
                     print(f'       ✅  title: "{title}" | +skills: {added_skills if added_skills else "none"}')
                     report_rows.append((score, company, position, 'tailored ✓'))
-                else:
-                    total_errors += 1
-                    print(f'       ⚠️   DB verify failed!')
-                    report_rows.append((score, company, position, 'verify failed ✗'))
-
-            time.sleep(SLEEP_BETWEEN_CALLS)
 
         print()
 

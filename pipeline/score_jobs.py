@@ -16,9 +16,9 @@ import argparse
 import json
 import os
 import sys
-import time
 import pymysql
 import pymysql.cursors
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from openai import OpenAI
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,7 +28,7 @@ from config import DEEPSEEK_API_KEY, DB_CONFIG as _DB_BASE
 # CONFIG
 # ---------------------------------------------------------------------------
 BATCH_SIZE = 10
-SLEEP_BETWEEN_CALLS = 0.5
+WORKERS = 5
 
 DB_CONFIG = {**_DB_BASE, 'cursorclass': pymysql.cursors.DictCursor}
 
@@ -295,7 +295,17 @@ def main():
     label = f" (posted within {args.posted_within}h)" if args.posted_within else ""
     if args.language:
         label += f" (language={args.language})"
-    print(f"🚀  Starting scoring{label}...\n")
+    print(f"🚀  Starting scoring ({WORKERS} workers){label}...\n")
+
+    def score_one(job: dict) -> tuple[dict, int, str, str]:
+        """Score a single job. Returns (job, score, notes, cv_variant). Uses own DB conn."""
+        score, notes, cv_variant = score_job(client, job)
+        thread_conn = get_connection()
+        try:
+            update_job(thread_conn, job['id'], job['source'], score if not (notes.startswith("API error") or notes.startswith("JSON parse")) else 0, notes, cv_variant)
+            return job, score, notes, cv_variant
+        finally:
+            thread_conn.close()
 
     while True:
         batch = fetch_batch(conn, args.posted_within, args.language)
@@ -305,31 +315,23 @@ def main():
         batch_num += 1
         print(f"── Batch {batch_num} ({len(batch)} jobs) ──────────────────────────")
 
-        for job in batch:
-            job_id = job['id']
-            source = job['source']
-            position = job.get('position', 'N/A')
-            company  = job.get('company', 'N/A')
+        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+            futures = {pool.submit(score_one, job): job for job in batch}
+            for future in as_completed(futures):
+                job, score, notes, cv_variant = future.result()
+                job_id = job['id']
+                position = job.get('position', 'N/A')
+                company = job.get('company', 'N/A')
 
-            score, notes, cv_variant = score_job(client, job)
-
-            if notes.startswith("API error") or notes.startswith("JSON parse"):
-                total_errors += 1
-                print(f"  ❌  [{job_id}] {company} — {position}")
-                print(f"       {notes}")
-                # Still mark as scored to avoid infinite loop; use score=0 as sentinel
-                update_job(conn, job_id, source, 0, notes, cv_variant)
-            else:
-                update_job(conn, job_id, source, score, notes, cv_variant)
-                verified = verify_update(conn, job_id, source)
-                total_scored += 1
-                bar = "🟢" if score >= 70 else "🟡" if score >= 50 else "🔴"
-                print(f"  {bar}  [{score:>3}] {company} — {position} [{cv_variant}]")
-                print(f"        {notes[:120]}")
-                if not verified or verified['fit_score'] != score:
-                    print(f"        ⚠️  Verify failed!")
-
-            time.sleep(SLEEP_BETWEEN_CALLS)
+                if notes.startswith("API error") or notes.startswith("JSON parse"):
+                    total_errors += 1
+                    print(f"  ❌  [{job_id}] {company} — {position}")
+                    print(f"       {notes}")
+                else:
+                    total_scored += 1
+                    bar = "🟢" if score >= 70 else "🟡" if score >= 50 else "🔴"
+                    print(f"  {bar}  [{score:>3}] {company} — {position} [{cv_variant}]")
+                    print(f"        {notes[:120]}")
 
         print()
 
